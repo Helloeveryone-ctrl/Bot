@@ -159,7 +159,7 @@ def get_csrf_token(session):
 def run_bot():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
-    save_page = "User:Fixinbot/Drafts review"
+    save_page = "User:Fixinbot/AFC helper"
 
     if not username or not password:
         print("Missing BOT_USERNAME or BOT_PASSWORD environment variables")
