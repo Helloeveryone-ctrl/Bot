@@ -21,8 +21,8 @@ jobs:
       - name: Install Pywikibot
         run: pip install pywikibot
 
-      - name: Run the bot script
-        env:
-          PYWIKIBOT_USER: ${{ secrets.PYWIKIBOT_USER }}
-          PYWIKIBOT_PASSWORD: ${{ secrets.PYWIKIBOT_PASSWORD }}
-        run: python bot.py
+      - name: Run bot
+  env:
+    PYWIKIBOT_USER: ${{ secrets.PYWIKIBOT_USER }}
+    PYWIKIBOT_PASSWORD: ${{ secrets.PYWIKIBOT_PASSWORD }}
+  run: python bot.py
