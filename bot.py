@@ -139,7 +139,7 @@ def save_to_page(session, page_title, text):
         'token': token,
         'format': 'json',
         'bot': True,
-        'summary': 'Bot: Updating draft list with submission status',
+        'summary': 'Updating page (bot)',
         'assert': 'user',
     })
     result = r.json()
