@@ -6,7 +6,7 @@ import mwparserfromhell
 API_URL = "https://test.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'CactusismeBot/1.0 (https://test.wikipedia.org/wiki/User:CactusismeBot)'
+    'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
 
 def login_and_get_session(username, password):
@@ -159,7 +159,7 @@ def get_csrf_token(session):
 def run_bot():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
-    save_page = "User:Cactusisme/patrolling articles"
+    save_page = "User:Fixinbot/Drafts review"
 
     if not username or not password:
         print("Missing BOT_USERNAME or BOT_PASSWORD environment variables")
