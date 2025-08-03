@@ -1,14 +1,22 @@
+from collections import defaultdict
+
 family = 'wikipedia'
 mylang = 'test'
 
-usernames = {
-    'wikipedia': {
-        'test': 'Cactusisme',  # Your bot username
+usernames = defaultdict(
+    lambda: defaultdict(str),
+    {
+        'wikipedia': defaultdict(str, {
+            'test': 'CactusismeBot',  # Your bot username here
+        }),
     }
-}
+)
 
-password_file = {
-    'wikipedia': {
-        'test': 'YourBotPasswordHere'  # Your bot password (plain text)
+password_file = defaultdict(
+    lambda: defaultdict(str),
+    {
+        'wikipedia': defaultdict(str, {
+            'test': 'Temporarybotpassword',  # Your bot password here
+        }),
     }
-}
+)
