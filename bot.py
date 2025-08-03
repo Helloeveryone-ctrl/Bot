@@ -11,8 +11,8 @@ HEADERS = {
 }
 
 def login_and_get_session():
-    username = "Fixinbot"
-    password = "botpassword"
+    username = "Cactusisme@Fixinbot"
+    password = "qft8e10vj9g93ltn1adee1u00jf3e74c"
 
     session = requests.Session()
     session.headers.update(HEADERS)
