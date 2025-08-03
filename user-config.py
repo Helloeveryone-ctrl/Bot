@@ -7,7 +7,7 @@ usernames = defaultdict(
     lambda: defaultdict(str),
     {
         'wikipedia': defaultdict(str, {
-            'test': 'CactusismeBot',  # Your bot username here
+            'test': 'CactusismeBot',
         }),
     }
 )
