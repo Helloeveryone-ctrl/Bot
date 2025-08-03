@@ -2,54 +2,25 @@ name: Daily Patrolling Bot
 
 on:
   schedule:
-    - cron: '0 0 * * *'    # Runs every day at midnight UTC
-  workflow_dispatch:       # Allows manual trigger from GitHub UI
+    - cron: '0 0 * * *'   # daily at midnight UTC
+  workflow_dispatch:      # manual trigger
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Python 3.10
+      - name: Setup Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install Pywikibot
         run: pip install pywikibot
 
-      - name: Run the bot script
-        env:
-          PYWIKIBOT_USER: ${{ secrets.PYWIKIBOT_USER }}
-          PYWIKIBOT_PASSWORD: ${{ secrets.PYWIKIBOT_PASSWORD }}
-        run: python bot.py
-name: Daily Patrolling Bot
-
-on:
-  schedule:
-    - cron: '0 0 * * *'    # Runs every day at midnight UTC
-  workflow_dispatch:       # Allows manual trigger from GitHub UI
-
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: pip install pywikibot
-
-      - name: Run the bot script
+      - name: Run bot script
         env:
           PYWIKIBOT_USER: ${{ secrets.PYWIKIBOT_USER }}
           PYWIKIBOT_PASSWORD: ${{ secrets.PYWIKIBOT_PASSWORD }}
