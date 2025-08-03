@@ -7,16 +7,9 @@ usernames = defaultdict(
     lambda: defaultdict(str),
     {
         'wikipedia': defaultdict(str, {
-            'test': 'CactusismeBot',  # Your bot username
+            'test': 'CactusismeBot',  # your bot username here
         }),
     }
 )
 
-password_file = defaultdict(
-    lambda: defaultdict(str),
-    {
-        'wikipedia': defaultdict(str, {
-            'test': 'Temporarybotpassword',  # Your bot password
-        }),
-    }
-)
+# DO NOT define password_file here — remove this variable completely.
