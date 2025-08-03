@@ -1,0 +1,33 @@
+name: Daily Patrolling Update
+
+on:
+  schedule:
+    # Runs daily at 00:00 UTC
+    - cron: '0 0 * * *'
+
+jobs:
+  update-patrolling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install pywikibot
+
+      - name: Run patrolling bot
+        env:
+          WIKI_FAMILY: wikipedia
+          WIKI_LANG: test
+          TARGET_PAGE: User:Cactusisme/patrolling articles
+          UNPATROLLED_LIMIT: '100'
+          # You need to store your bot credentials as secrets in GitHub repo:
+          # https://github.com/<user>/<repo>/settings/secrets/actions
+          PYWIKIBOT_USER: ${{ secrets.PYWIKIBOT_USER }}
+          PYWIKIBOT_PASSWORD: ${{ secrets.PYWIKIBOT_PASSWORD }}
+        run: |
+          python bot.py
