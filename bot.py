@@ -60,7 +60,7 @@ def get_recent_pages(session, minutes=60):
             'rcstart': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
             'rcend': start_iso,
             'rcdir': 'older',
-            'rcnamespace': 0,  # Only mainspace; use 118 for Draft
+            'rcnamespace': 0,  # Only mainspace
             'rctype': 'new',
             'rclimit': 'max',
             'format': 'json'
@@ -92,20 +92,43 @@ def get_csrf_token(session):
     return r.json()['query']['tokens']['csrftoken']
 
 
+def get_current_page_text(session, title):
+    r = session.get(API_URL, params={
+        'action': 'query',
+        'prop': 'revisions',
+        'titles': title,
+        'rvprop': 'content',
+        'format': 'json'
+    })
+    pages = r.json()['query']['pages']
+    for page_id in pages:
+        return pages[page_id].get('revisions', [{}])[0].get('*', '')
+    return ''
+
+
 def save_to_page(session, page_title, lines):
-    text = "== Pages created in the past hour ==\n" + "\n".join(f"* [[{title}]]" for title in lines)
+    now = datetime.datetime.utcnow()
+    timestamp = now.strftime('%Y-%m-%d %H:%M UTC')
+    section_header = f"== {timestamp} ==\n"
+    section_content = "\n".join(f"* [[{title}]]" for title in lines)
+
+    new_section = f"{section_header}{section_content}\n\n"
+
+    existing_text = get_current_page_text(session, page_title)
+    new_text = new_section + existing_text
 
     token = get_csrf_token(session)
     r = session.post(API_URL, data={
         'action': 'edit',
         'title': page_title,
-        'text': text,
+        'text': new_text,
         'token': token,
         'format': 'json',
         'bot': True,
-        'summary': 'Updating recent page creations (bot)',
+        'summary': f'Added section for {timestamp}',
         'assert': 'user',
     })
+
     result = r.json()
     if result.get('edit', {}).get('result') == 'Success':
         print(f"✅ Updated page {page_title}")
@@ -125,8 +148,11 @@ def run_bot():
     session = login_and_get_session(username, password)
     titles = get_recent_pages(session, minutes=60)
 
-    print(f"📄 Found {len(titles)} new pages in the past hour")
-    save_to_page(session, save_page, titles)
+    if titles:
+        print(f"📄 Found {len(titles)} new pages in the past hour")
+        save_to_page(session, save_page, titles)
+    else:
+        print("ℹ️ No new pages found.")
 
 
 if __name__ == "__main__":
