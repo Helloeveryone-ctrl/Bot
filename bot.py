@@ -1,6 +1,6 @@
 import os
 import requests
-import time
+import datetime
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 
@@ -13,7 +13,7 @@ def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Step 1: Get login token
+    # Get login token
     r1 = session.get(API_URL, params={
         'action': 'query',
         'meta': 'tokens',
@@ -22,7 +22,7 @@ def login_and_get_session(username, password):
     })
     login_token = r1.json()['query']['tokens']['logintoken']
 
-    # Step 2: Post login request
+    # Log in
     r2 = session.post(API_URL, data={
         'action': 'login',
         'lgname': username,
@@ -34,94 +34,53 @@ def login_and_get_session(username, password):
     if r2.json()['login']['result'] != 'Success':
         raise Exception(f"Login failed! Response: {r2.json()}")
 
-    # Step 3: Confirm login by fetching user info
+    # Confirm login
     r3 = session.get(API_URL, params={
         'action': 'query',
         'meta': 'userinfo',
         'format': 'json'
     })
-    logged_in_user = r3.json()['query']['userinfo']['name']
-    print(f"✅ Logged in as {logged_in_user}")
-
+    user = r3.json()['query']['userinfo']['name']
+    print(f"✅ Logged in as {user}")
     return session
 
 
-def fetch_drafts(session):
-    drafts = []
-    apcontinue = None
+def get_recent_pages(session, minutes=60):
+    now = datetime.datetime.utcnow()
+    start = now - datetime.timedelta(minutes=minutes)
+    start_iso = start.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    titles = []
+    rccontinue = None
+
     while True:
         params = {
             'action': 'query',
-            'list': 'allpages',
-            'apnamespace': 118,
-            'aplimit': 'max',
-            'format': 'json',
+            'list': 'recentchanges',
+            'rcstart': now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'rcend': start_iso,
+            'rcdir': 'older',
+            'rcnamespace': 0,  # Only mainspace; use 118 for Draft
+            'rctype': 'new',
+            'rclimit': 'max',
+            'format': 'json'
         }
-        if apcontinue:
-            params['apcontinue'] = apcontinue
+        if rccontinue:
+            params['rccontinue'] = rccontinue
 
         r = session.get(API_URL, params=params)
         data = r.json()
+        changes = data.get('query', {}).get('recentchanges', [])
 
-        pages = data['query']['allpages']
-        for p in pages:
-            drafts.append(p['title'])
-
-        print(f"🔄 Fetched {len(drafts)} drafts so far...")
+        for change in changes:
+            titles.append(change['title'])
 
         if 'continue' in data:
-            apcontinue = data['continue']['apcontinue']
-            time.sleep(0.1)
+            rccontinue = data['continue']['rccontinue']
         else:
             break
 
-    print(f"📄 Found total {len(drafts)} drafts")
-    return drafts
-
-
-def group_drafts_by_letter(drafts):
-    grouped = {}
-    for title in drafts:
-        if title.startswith("Draft:"):
-            page_name = title[6:]
-        else:
-            page_name = title
-        if not page_name:
-            continue
-        first_letter = page_name[0].upper()
-        grouped.setdefault(first_letter, []).append(title)
-    return grouped
-
-
-def save_grouped_drafts(session, grouped, base_page):
-    for letter in sorted(grouped.keys()):
-        subpage_title = f"{base_page}/{letter}"
-        lines = [f"== {letter} =="]
-        for title in sorted(grouped[letter]):
-            lines.append(f"* [[{title}]]")
-        text = "\n".join(lines)
-
-        print(f"💾 Saving {len(grouped[letter])} drafts to {subpage_title}...")
-        save_to_page(session, subpage_title, text)
-
-
-def save_to_page(session, page_title, text):
-    token = get_csrf_token(session)
-    r = session.post(API_URL, data={
-        'action': 'edit',
-        'title': page_title,
-        'text': text,
-        'token': token,
-        'format': 'json',
-        'bot': True,
-        'summary': 'Updating draft list (bot)',
-        'assert': 'user',
-    })
-    result = r.json()
-    if result.get('edit', {}).get('result') == 'Success':
-        print(f"✅ Updated page {page_title}")
-    else:
-        print(f"❌ Failed to update page {page_title}: {result}")
+    return sorted(set(titles))
 
 
 def get_csrf_token(session):
@@ -133,19 +92,41 @@ def get_csrf_token(session):
     return r.json()['query']['tokens']['csrftoken']
 
 
+def save_to_page(session, page_title, lines):
+    text = "== Pages created in the past hour ==\n" + "\n".join(f"* [[{title}]]" for title in lines)
+
+    token = get_csrf_token(session)
+    r = session.post(API_URL, data={
+        'action': 'edit',
+        'title': page_title,
+        'text': text,
+        'token': token,
+        'format': 'json',
+        'bot': True,
+        'summary': 'Updating recent page creations (bot)',
+        'assert': 'user',
+    })
+    result = r.json()
+    if result.get('edit', {}).get('result') == 'Success':
+        print(f"✅ Updated page {page_title}")
+    else:
+        print(f"❌ Failed to update page {page_title}: {result}")
+
+
 def run_bot():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
-    base_page = "User:Fixinbot/AFC helper"
+    save_page = "User:Fixinbot/Updates"
 
     if not username or not password:
         print("❌ Missing BOT_USERNAME or BOT_PASSWORD environment variables")
         return
 
     session = login_and_get_session(username, password)
-    drafts = fetch_drafts(session)
-    grouped = group_drafts_by_letter(drafts)
-    save_grouped_drafts(session, grouped, base_page)
+    titles = get_recent_pages(session, minutes=60)
+
+    print(f"📄 Found {len(titles)} new pages in the past hour")
+    save_to_page(session, save_page, titles)
 
 
 if __name__ == "__main__":
