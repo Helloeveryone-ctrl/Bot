@@ -125,7 +125,7 @@ def save_to_page(session, page_title, lines):
         'token': token,
         'format': 'json',
         'bot': True,
-        'summary': f'Added section for {timestamp}',
+        'summary': f'Added section for {timestamp} (bot)',
         'assert': 'user',
     })
 
