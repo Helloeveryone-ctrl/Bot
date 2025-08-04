@@ -1,6 +1,7 @@
 import os
 import requests
 import datetime
+import time
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 
@@ -31,8 +32,9 @@ def login_and_get_session(username, password):
         'format': 'json'
     })
 
-    if r2.json()['login']['result'] != 'Success':
-        raise Exception(f"Login failed! Response: {r2.json()}")
+    result = r2.json()
+    if result['login']['result'] != 'Success':
+        raise Exception(f"Login failed! Response: {result}")
 
     # Confirm login
     r3 = session.get(API_URL, params={
@@ -145,7 +147,20 @@ def run_bot():
         print("❌ Missing BOT_USERNAME or BOT_PASSWORD environment variables")
         return
 
-    session = login_and_get_session(username, password)
+    # Retry login until successful
+    session = None
+    while session is None:
+        try:
+            session = login_and_get_session(username, password)
+        except Exception as e:
+            error_message = str(e)
+            if "blocked" in error_message.lower() or "Login failed" in error_message:
+                print("⚠️ Login blocked or failed. Retrying in 60 seconds...")
+                time.sleep(60)
+            else:
+                print(f"❌ Unexpected error: {e}")
+                return  # Exit if it's a different error
+
     titles = get_recent_pages(session, minutes=60)
 
     if titles:
