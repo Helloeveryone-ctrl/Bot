@@ -3,10 +3,10 @@ import requests
 import time
 import mwparserfromhell
 
-API_URL = "https://test.wikipedia.org/w/api.php"
+API_URL = "https://en.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
+    'User-Agent': 'Fixinbot/1.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
 }
 
 def login_and_get_session(username, password):
