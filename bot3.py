@@ -2,6 +2,7 @@ import os
 import requests
 import sys
 import mwparserfromhell
+import datetime
 import time
 
 API_URL = "https://test.wikipedia.org/w/api.php"
@@ -91,8 +92,20 @@ def get_page_content(session, title):
         'rvprop': 'content',
         'format': 'json'
     }
-    r = session.get(API_URL, params=params)
-    pages = r.json().get('query', {}).get('pages', {})
+    try:
+        r = session.get(API_URL, params=params)
+        if r.status_code != 200:
+            print(f"⚠️ HTTP error {r.status_code} while getting {title}")
+            return ''
+        data = r.json()
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ Request error while getting {title}: {e}")
+        return ''
+    except ValueError:
+        print(f"⚠️ JSON decode error while getting {title}. Response: {r.text[:200]}")
+        return ''
+
+    pages = data.get('query', {}).get('pages', {})
     for pageid in pages:
         revs = pages[pageid].get('revisions', [])
         if revs:
@@ -133,16 +146,20 @@ def process_category_page(session, title):
     wikicode = mwparserfromhell.parse(content)
     popcat_templates = [t for t in wikicode.filter_templates() if t.name.strip().lower() == 'popcat']
 
-    # Only remove {{popcat}} if there are 3 or more categories
-    if cat_count >= 3 and popcat_templates:
-        for t in popcat_templates:
-            wikicode.remove(t)
+    changed = False
+    if cat_count >= 3:
+        # Remove {{popcat}} if present
+        if popcat_templates:
+            for t in popcat_templates:
+                wikicode.remove(t)
+            changed = True
+            summary = "Removed {{popcat}} (category has 3 or more categories)"
 
-        summary = "Removed {{popcat}} (category has 3 or more categories)"
+    if changed:
         if save_page(session, title, str(wikicode), summary):
-            time.sleep(3)
+            time.sleep(5)
     else:
-        print(f"No removal needed for {title}")
+        print(f"No change needed for {title}")
 
 def main():
     username = os.getenv("BOT_USERNAME")
