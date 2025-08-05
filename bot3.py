@@ -9,33 +9,31 @@ HEADERS = {
     'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
 
-
 def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Get login token
     r1 = session.get(API_URL, params={
         'action': 'query', 'meta': 'tokens', 'type': 'login', 'format': 'json'
     })
     login_token = r1.json()['query']['tokens']['logintoken']
 
-    # Log in
     r2 = session.post(API_URL, data={
         'action': 'login', 'lgname': username, 'lgpassword': password,
         'lgtoken': login_token, 'format': 'json'
     })
+
     if r2.json()['login']['result'] != 'Success':
         print("❌ Login failed.")
         sys.exit(1)
 
     return session
 
-
 def get_csrf_token(session):
-    r = session.get(API_URL, params={'action': 'query', 'meta': 'tokens', 'format': 'json'})
+    r = session.get(API_URL, params={
+        'action': 'query', 'meta': 'tokens', 'format': 'json'
+    })
     return r.json()['query']['tokens']['csrftoken']
-
 
 def get_all_category_pages(session, apcontinue=None, limit=50):
     params = {
@@ -54,7 +52,6 @@ def get_all_category_pages(session, apcontinue=None, limit=50):
     next_continue = data.get('continue', {}).get('apcontinue', None)
     return pages, next_continue
 
-
 def get_category_member_count(session, category_title):
     total = 0
     cmcontinue = None
@@ -72,7 +69,7 @@ def get_category_member_count(session, category_title):
 
         r = session.get(API_URL, params=params)
         if not r.content:
-            return 0  # Skip on error
+            return 0
         data = r.json()
         total += len(data.get('query', {}).get('categorymembers', []))
 
@@ -83,25 +80,32 @@ def get_category_member_count(session, category_title):
 
     return total
 
-
 def get_page_content(session, title):
     r = session.get(API_URL, params={
-        'action': 'query', 'prop': 'revisions',
-        'titles': title, 'rvprop': 'content', 'format': 'json'
+        'action': 'query',
+        'prop': 'revisions',
+        'titles': title,
+        'rvprop': 'content',
+        'format': 'json'
     })
     pages = r.json().get('query', {}).get('pages', {})
     for page in pages.values():
         return page.get('revisions', [{}])[0].get('*', '')
     return ''
 
-
 def save_page(session, title, text, summary):
     token = get_csrf_token(session)
     r = session.post(API_URL, data={
-        'action': 'edit', 'title': title, 'text': text,
-        'token': token, 'format': 'json', 'bot': True,
-        'summary': summary, 'assert': 'user'
+        'action': 'edit',
+        'title': title,
+        'text': text,
+        'token': token,
+        'format': 'json',
+        'bot': True,
+        'summary': summary,
+        'assert': 'user'
     })
+
     if 'error' in r.json():
         print(f"❌ Edit error on {title}: {r.json()['error']}")
     elif r.json().get('edit', {}).get('result') == 'Success':
@@ -109,32 +113,38 @@ def save_page(session, title, text, summary):
     else:
         print(f"❌ Unknown edit failure on {title}")
 
-
 def process_category(session, title):
     count = get_category_member_count(session, title)
-    if count < 3:
-        print(f"ℹ️ {title} has only {count} members — skipping.")
-        return
-
     content = get_page_content(session, title)
     if not content:
         print(f"⚠️ Could not get content for {title}")
         return
 
     code = mwparserfromhell.parse(content)
+    has_popcat = any(tpl.name.strip().lower() == "popcat" for tpl in code.filter_templates())
     changed = False
 
-    for tpl in code.filter_templates():
-        if tpl.name.strip().lower() == "popcat":
-            code.remove(tpl)
+    if count >= 3:
+        # Remove popcat if present
+        for tpl in code.filter_templates():
+            if tpl.name.strip().lower() == "popcat":
+                code.remove(tpl)
+                changed = True
+        if changed:
+            save_page(session, title, str(code), "Removing {{popcat}} — category has 3 or more members")
+            time.sleep(5)
+        else:
+            print(f"🔍 {title} has 3+ members, no {{popcat}} to remove.")
+
+    elif count < 3:
+        # Add popcat if missing
+        if not has_popcat:
+            code.insert(0, "{{popcat}}\n")
             changed = True
-
-    if changed:
-        save_page(session, title, str(code), "Removing {{popcat}} — category has 3 or more pages")
-        time.sleep(5)  # Pause to avoid rate limit
-    else:
-        print(f"🔍 {title} has 3+ members but no {{popcat}} found.")
-
+            save_page(session, title, str(code), "Adding {{popcat}} — category has fewer than 3 members")
+            time.sleep(5)
+        else:
+            print(f"ℹ️ {title} already has {{popcat}}, and <3 members.")
 
 def main():
     username = os.getenv("BOT_USERNAME")
@@ -152,11 +162,12 @@ def main():
             break
 
         for page in pages:
-            process_category(session, page['title'])
+            title = page['title']
+            print(f"🔎 Checking: {title}")
+            process_category(session, title)
 
         if not cont:
             break
-
 
 if __name__ == "__main__":
     main()
