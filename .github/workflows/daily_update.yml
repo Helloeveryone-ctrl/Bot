@@ -22,7 +22,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests mwparserfromhell
-
+- name: Run bot.py
+        env:
+          BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          BOT_PASSWORD: ${{ secrets.BOT_PASSWORD }}
+        run: |
+          python bot.p
+          
+- name: Run bot2.py
+        env:
+          BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          BOT_PASSWORD: ${{ secrets.BOT_PASSWORD }}
+        run: |
+          python bot2.py
       - name: Run bot3.py
         env:
           BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
