@@ -1,4 +1,4 @@
-name: Draft List Update
+name: Update
 
 on:
   schedule:
@@ -29,3 +29,10 @@ jobs:
           BOT_PASSWORD: ${{ secrets.BOT_PASSWORD }}
         run: |
           python bot.py
+
+      - name: Run bot2.py
+        env:
+          BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          BOT_PASSWORD: ${{ secrets.BOT_PASSWORD }}
+        run: |
+          python bot2.py
