@@ -9,8 +9,6 @@ HEADERS = {
     'User-Agent': 'Fixinbot/1.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
 }
 
-MAX_PAGE_SIZE = 25000  # bytes
-
 
 def login_and_get_session(username, password):
     session = requests.Session()
@@ -139,7 +137,7 @@ def save_to_page(session, page_title, lines):
         if err.get('code') == 'blocked':
             print(f"❌ Edit blocked: {err.get('info', '')}")
             print("💡 IP blocked by Wikimedia. Exiting for GitHub Actions to retry.")
-            sys.exit(1)
+            sys.exit(1)  # Fail fast so GitHub Actions can auto-rerun
         else:
             print(f"❌ Edit error: {err}")
             sys.exit(1)
@@ -153,7 +151,7 @@ def save_to_page(session, page_title, lines):
 def run_bot():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
-    base_page = "User:Fixinbot/Updates"
+    save_page = "User:Fixinbot/Updates"
 
     if not username or not password:
         print("❌ Missing BOT_USERNAME or BOT_PASSWORD environment variables")
@@ -163,34 +161,11 @@ def run_bot():
 
     titles = get_recent_pages(session, minutes=60)
 
-    if not titles:
-        print("ℹ️ No new pages found.")
-        return
-
-    print(f"📄 Found {len(titles)} new pages in the past hour")
-
-    now = datetime.datetime.utcnow()
-    timestamp = now.strftime('%Y-%m-%d %H:%M UTC')
-    section_header = f"== {timestamp} ==\n"
-    section_content = "\n".join(f"* [[{title}]]" for title in titles)
-    new_section = f"{section_header}{section_content}\n\n"
-
-    # Try base page and increment page number if size limit exceeded
-    for i in range(1, 100):  # max 99 pages max, adjust if needed
-        if i == 1:
-            page_title = base_page
-        else:
-            page_title = f"{base_page} {i}"
-
-        existing_text = get_current_page_text(session, page_title)
-        combined_text = new_section + existing_text
-
-        # Check byte size of combined text
-        if len(combined_text.encode('utf-8')) <= MAX_PAGE_SIZE:
-            save_to_page(session, page_title, titles)
-            break
+    if titles:
+        print(f"📄 Found {len(titles)} new pages in the past hour")
+        save_to_page(session, save_page, titles)
     else:
-        print(f"❌ Could not save: all pages exceeded {MAX_PAGE_SIZE} bytes limit.")
+        print("ℹ️ No new pages found.")
 
 
 if __name__ == "__main__":
