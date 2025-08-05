@@ -2,7 +2,7 @@ import os
 import requests
 import sys
 import mwparserfromhell
-import datetime
+import time
 
 API_URL = "https://test.wikipedia.org/w/api.php"  # Change if needed
 
@@ -121,17 +121,6 @@ def save_page(session, title, text, summary):
     print(f"❌ Unexpected edit response on {title}: {result}")
     return False
 
-def log_edit(session, category_title, action):
-    log_page = "User:Fixinbot/Log"
-    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    new_log_line = f"* {timestamp}: Edited [[{category_title}]] — {action}\n"
-
-    current_log = get_page_content(session, log_page)
-    new_text = new_log_line + (current_log if current_log else '')
-
-    summary = f"Log edit: {action} on {category_title}"
-    save_page(session, log_page, new_text, summary)
-
 def process_category_page(session, title):
     categories = get_category_page_categories(session, title)
     cat_count = len(categories)
@@ -146,24 +135,20 @@ def process_category_page(session, title):
 
     changed = False
     if cat_count >= 3:
-        # Remove {{popcat}} if present
         if popcat_templates:
             for t in popcat_templates:
                 wikicode.remove(t)
             changed = True
             summary = "Removed {{popcat}} (category has 3 or more categories)"
-            action = "Removed {{popcat}}"
     else:
-        # Add {{popcat}} if missing
         if not popcat_templates:
             wikicode.insert(0, "{{popcat}}\n")
             changed = True
             summary = "Added {{popcat}} (category has fewer than 3 categories)"
-            action = "Added {{popcat}}"
 
     if changed:
         if save_page(session, title, str(wikicode), summary):
-            log_edit(session, title, action)
+            time.sleep(3)  # Pause after a successful edit
     else:
         print(f"No change needed for {title}")
 
