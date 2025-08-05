@@ -4,7 +4,7 @@ import sys
 import mwparserfromhell
 import time
 
-API_URL = "https://test.wikipedia.org/w/api.php"  # Change if needed
+API_URL = "https://test.wikipedia.org/w/api.php"
 
 HEADERS = {
     'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
@@ -133,24 +133,16 @@ def process_category_page(session, title):
     wikicode = mwparserfromhell.parse(content)
     popcat_templates = [t for t in wikicode.filter_templates() if t.name.strip().lower() == 'popcat']
 
-    changed = False
-    if cat_count >= 3:
-        if popcat_templates:
-            for t in popcat_templates:
-                wikicode.remove(t)
-            changed = True
-            summary = "Removed {{popcat}} (category has 3 or more categories)"
-    else:
-        if not popcat_templates:
-            wikicode.insert(0, "{{popcat}}\n")
-            changed = True
-            summary = "Added {{popcat}} (category has fewer than 3 categories)"
+    # Only remove {{popcat}} if there are 3 or more categories
+    if cat_count >= 3 and popcat_templates:
+        for t in popcat_templates:
+            wikicode.remove(t)
 
-    if changed:
+        summary = "Removed {{popcat}} (category has 3 or more categories)"
         if save_page(session, title, str(wikicode), summary):
-            time.sleep(10)  # Pause after a successful edit
+            time.sleep(3)
     else:
-        print(f"No change needed for {title}")
+        print(f"No removal needed for {title}")
 
 def main():
     username = os.getenv("BOT_USERNAME")
