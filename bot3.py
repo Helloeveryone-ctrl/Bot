@@ -1,49 +1,41 @@
 import os
-import requests
-import sys
-import mwparserfromhell
 import time
+import sys
+import requests
+import mwparserfromhell
 
 API_URL = "https://test.wikipedia.org/w/api.php"
-
 HEADERS = {
     'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
+
 
 def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
+    # Get login token
     r1 = session.get(API_URL, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'type': 'login',
-        'format': 'json'
+        'action': 'query', 'meta': 'tokens', 'type': 'login', 'format': 'json'
     })
     login_token = r1.json()['query']['tokens']['logintoken']
 
+    # Log in
     r2 = session.post(API_URL, data={
-        'action': 'login',
-        'lgname': username,
-        'lgpassword': password,
-        'lgtoken': login_token,
-        'format': 'json'
+        'action': 'login', 'lgname': username, 'lgpassword': password,
+        'lgtoken': login_token, 'format': 'json'
     })
-
     if r2.json()['login']['result'] != 'Success':
-        print("Login failed")
+        print("❌ Login failed.")
         sys.exit(1)
 
-    print("Logged in successfully.")
     return session
 
+
 def get_csrf_token(session):
-    r = session.get(API_URL, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'format': 'json'
-    })
+    r = session.get(API_URL, params={'action': 'query', 'meta': 'tokens', 'format': 'json'})
     return r.json()['query']['tokens']['csrftoken']
+
 
 def get_all_category_pages(session, apcontinue=None, limit=50):
     params = {
@@ -51,109 +43,120 @@ def get_all_category_pages(session, apcontinue=None, limit=50):
         'list': 'allpages',
         'apnamespace': 14,
         'aplimit': limit,
-        'format': 'json'
+        'format': 'json',
     }
     if apcontinue:
         params['apcontinue'] = apcontinue
 
     r = session.get(API_URL, params=params)
     data = r.json()
-    return data.get('query', {}).get('allpages', []), data.get('continue', {}).get('apcontinue', None)
+    pages = data.get('query', {}).get('allpages', [])
+    next_continue = data.get('continue', {}).get('apcontinue', None)
+    return pages, next_continue
+
 
 def get_category_member_count(session, category_title):
-    cmparams = {
-        'action': 'query',
-        'list': 'categorymembers',
-        'cmtitle': category_title,
-        'cmlimit': 1,
-        'format': 'json'
-    }
-    r = session.get(API_URL, params=cmparams)
-    return r.json().get('query', {}).get('categorymembers', []), r.json().get('query-continue')
+    total = 0
+    cmcontinue = None
 
-def get_category_page_content(session, title):
+    while True:
+        params = {
+            'action': 'query',
+            'list': 'categorymembers',
+            'cmtitle': category_title,
+            'cmlimit': 'max',
+            'format': 'json'
+        }
+        if cmcontinue:
+            params['cmcontinue'] = cmcontinue
+
+        r = session.get(API_URL, params=params)
+        if not r.content:
+            return 0  # Skip on error
+        data = r.json()
+        total += len(data.get('query', {}).get('categorymembers', []))
+
+        if 'continue' in data:
+            cmcontinue = data['continue']['cmcontinue']
+        else:
+            break
+
+    return total
+
+
+def get_page_content(session, title):
     r = session.get(API_URL, params={
-        'action': 'query',
-        'prop': 'revisions',
-        'rvprop': 'content',
-        'titles': title,
-        'format': 'json'
+        'action': 'query', 'prop': 'revisions',
+        'titles': title, 'rvprop': 'content', 'format': 'json'
     })
     pages = r.json().get('query', {}).get('pages', {})
-    for page_id in pages:
-        return pages[page_id].get('revisions', [{}])[0].get('*', '')
+    for page in pages.values():
+        return page.get('revisions', [{}])[0].get('*', '')
     return ''
+
 
 def save_page(session, title, text, summary):
     token = get_csrf_token(session)
     r = session.post(API_URL, data={
-        'action': 'edit',
-        'title': title,
-        'text': text,
-        'token': token,
-        'format': 'json',
-        'bot': True,
-        'summary': summary,
-        'assert': 'user',
+        'action': 'edit', 'title': title, 'text': text,
+        'token': token, 'format': 'json', 'bot': True,
+        'summary': summary, 'assert': 'user'
     })
-    result = r.json()
-    if result.get('edit', {}).get('result') == 'Success':
+    if 'error' in r.json():
+        print(f"❌ Edit error on {title}: {r.json()['error']}")
+    elif r.json().get('edit', {}).get('result') == 'Success':
         print(f"✅ Edited {title}")
     else:
-        print(f"❌ Failed to edit {title}: {result}")
+        print(f"❌ Unknown edit failure on {title}")
 
-def process_category(session, category_title):
-    members, _ = get_category_member_count(session, category_title)
-    count = len(members)
 
+def process_category(session, title):
+    count = get_category_member_count(session, title)
     if count < 3:
-        print(f"Skipping {category_title}, has less than 3 members")
+        print(f"ℹ️ {title} has only {count} members — skipping.")
         return
 
-    # Process the category page content
-    content = get_category_page_content(session, category_title)
+    content = get_page_content(session, title)
     if not content:
-        print(f"⚠️ Couldn't fetch content for {category_title}")
+        print(f"⚠️ Could not get content for {title}")
         return
 
-    wikicode = mwparserfromhell.parse(content)
-    templates = wikicode.filter_templates()
+    code = mwparserfromhell.parse(content)
     changed = False
 
-    for template in templates:
-        if template.name.strip().lower() == 'popcat':
-            wikicode.remove(template)
+    for tpl in code.filter_templates():
+        if tpl.name.strip().lower() == "popcat":
+            code.remove(tpl)
             changed = True
-            print(f"Removing {{popcat}} from {category_title}")
-            break
 
     if changed:
-        save_page(session, category_title, str(wikicode), "Removed {{popcat}} (3 or more pages in category)")
-        time.sleep(5)  # Delay to avoid hitting the rate limit
+        save_page(session, title, str(code), "Removing {{popcat}} — category has 3 or more pages")
+        time.sleep(5)  # Pause to avoid rate limit
+    else:
+        print(f"🔍 {title} has 3+ members but no {{popcat}} found.")
+
 
 def main():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
-
     if not username or not password:
-        print("❌ Missing BOT_USERNAME or BOT_PASSWORD")
+        print("❌ BOT_USERNAME or BOT_PASSWORD not set.")
         sys.exit(1)
 
     session = login_and_get_session(username, password)
+    cont = None
 
-    apcontinue = None
     while True:
-        pages, apcontinue = get_all_category_pages(session, apcontinue=apcontinue)
+        pages, cont = get_all_category_pages(session, apcontinue=cont, limit=50)
         if not pages:
             break
 
         for page in pages:
-            category_title = page['title']
-            print(f"Checking {category_title}...")
-            process_category(session, category_title)
+            process_category(session, page['title'])
 
-        if not apcontinue:
+        if not cont:
             break
+
 
 if __name__ == "__main__":
     main()
