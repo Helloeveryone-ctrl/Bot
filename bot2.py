@@ -2,6 +2,7 @@ import os
 import requests
 import sys
 import re
+import datetime
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 
@@ -95,6 +96,40 @@ def extract_titles_in_lines(lines):
             line_map.append(idx)
     return titles, line_map
 
+def remove_old_sections(lines, days=7):
+    """Remove sections older than given days.
+    Assumes sections start with lines like == YYYY-MM-DD HH:MM UTC ==."""
+    new_lines = []
+    current_section_date = None
+    section_buffer = []
+
+    date_pattern = re.compile(r'^==\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC)\s*==\s*$')
+    now = datetime.datetime.utcnow()
+
+    def section_is_recent(section_date_str):
+        try:
+            section_date = datetime.datetime.strptime(section_date_str, "%Y-%m-%d %H:%M UTC")
+        except Exception:
+            return True  # If cannot parse, keep section
+        age = now - section_date
+        return age.days < days
+
+    for line in lines:
+        m = date_pattern.match(line)
+        if m:
+            # New section started: flush previous section if recent
+            if current_section_date is None or section_is_recent(current_section_date):
+                new_lines.extend(section_buffer)
+            # Reset for new section
+            current_section_date = m.group(1)
+            section_buffer = [line]
+        else:
+            section_buffer.append(line)
+    # Flush last section
+    if current_section_date is None or section_is_recent(current_section_date):
+        new_lines.extend(section_buffer)
+    return new_lines
+
 def run_bot():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
@@ -111,6 +146,11 @@ def run_bot():
         return
 
     lines = text.splitlines()
+
+    # Remove old sections
+    lines = remove_old_sections(lines, days=7)
+
+    # Now remove deleted and duplicate pages as before
     titles, line_indices = extract_titles_in_lines(lines)
 
     if not titles:
@@ -131,42 +171,41 @@ def run_bot():
         else:
             seen.add(title)
 
-    if not lines_to_remove:
-        print("✅ No deleted or duplicate entries found.")
-        return
+    if lines_to_remove:
+        # Remove lines marked (in reverse order to keep indexes correct)
+        for idx in sorted(lines_to_remove, reverse=True):
+            del lines[idx]
 
-    # Remove lines marked (in reverse order to keep indexes correct)
-    for idx in sorted(lines_to_remove, reverse=True):
-        del lines[idx]
+        new_text = "\n".join(lines)
 
-    new_text = "\n".join(lines)
+        token = get_csrf_token(session)
+        r = session.post(API_URL, data={
+            'action': 'edit',
+            'title': page_title,
+            'text': new_text,
+            'token': token,
+            'format': 'json',
+            'bot': True,
+            'summary': 'Removed deleted, duplicate, and entries older than 7 days (bot)',
+            'assert': 'user',
+        })
 
-    token = get_csrf_token(session)
-    r = session.post(API_URL, data={
-        'action': 'edit',
-        'title': page_title,
-        'text': new_text,
-        'token': token,
-        'format': 'json',
-        'bot': True,
-        'summary': 'Removed deleted and duplicate pages from updates (bot)',
-        'assert': 'user',
-    })
-
-    result = r.json()
-    if 'error' in result:
-        err = result['error']
-        if err.get('code') == 'blocked':
-            print(f"❌ Edit blocked: {err.get('info', '')}")
-            sys.exit(1)
+        result = r.json()
+        if 'error' in result:
+            err = result['error']
+            if err.get('code') == 'blocked':
+                print(f"❌ Edit blocked: {err.get('info', '')}")
+                sys.exit(1)
+            else:
+                print(f"❌ Edit error: {err}")
+                sys.exit(1)
+        elif result.get('edit', {}).get('result') == 'Success':
+            print(f"✅ Cleaned and updated page {page_title}")
         else:
-            print(f"❌ Edit error: {err}")
+            print(f"❌ Unexpected edit response: {result}")
             sys.exit(1)
-    elif result.get('edit', {}).get('result') == 'Success':
-        print(f"✅ Cleaned and updated page {page_title}")
     else:
-        print(f"❌ Unexpected edit response: {result}")
-        sys.exit(1)
+        print("✅ No deleted, duplicate, or old entries found.")
 
 if __name__ == "__main__":
     run_bot()
