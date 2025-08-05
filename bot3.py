@@ -2,7 +2,6 @@ import os
 import requests
 import sys
 import mwparserfromhell
-import datetime
 import time
 
 API_URL = "https://test.wikipedia.org/w/api.php"
@@ -36,12 +35,11 @@ def login_and_get_session(username, password):
         print(f"❌ Login failed: {result}")
         sys.exit(1)
 
-    r3 = session.get(API_URL, params={
+    user = session.get(API_URL, params={
         'action': 'query',
         'meta': 'userinfo',
         'format': 'json'
-    })
-    user = r3.json()['query']['userinfo']['name']
+    }).json()['query']['userinfo']['name']
     print(f"✅ Logged in as {user}")
     return session
 
@@ -75,10 +73,16 @@ def get_category_page_categories(session, title):
         'prop': 'categories',
         'titles': title,
         'cllimit': 'max',
+        'clshow': '!hidden',  # only visible categories
         'format': 'json'
     }
     r = session.get(API_URL, params=params)
-    pages = r.json().get('query', {}).get('pages', {})
+    try:
+        data = r.json()
+    except Exception as e:
+        print(f"⚠️ Failed to parse JSON for {title}: {e}")
+        return []
+    pages = data.get('query', {}).get('pages', {})
     for pageid in pages:
         cats = pages[pageid].get('categories', [])
         return [cat['title'] for cat in cats]
@@ -92,24 +96,15 @@ def get_page_content(session, title):
         'rvprop': 'content',
         'format': 'json'
     }
+    r = session.get(API_URL, params=params)
     try:
-        r = session.get(API_URL, params=params)
-        if r.status_code != 200:
-            print(f"⚠️ HTTP error {r.status_code} while getting {title}")
-            return ''
-        data = r.json()
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ Request error while getting {title}: {e}")
-        return ''
-    except ValueError:
-        print(f"⚠️ JSON decode error while getting {title}. Response: {r.text[:200]}")
-        return ''
-
-    pages = data.get('query', {}).get('pages', {})
-    for pageid in pages:
-        revs = pages[pageid].get('revisions', [])
-        if revs:
-            return revs[0].get('*', '')
+        pages = r.json().get('query', {}).get('pages', {})
+        for pageid in pages:
+            revs = pages[pageid].get('revisions', [])
+            if revs:
+                return revs[0].get('*', '')
+    except Exception as e:
+        print(f"⚠️ Error getting content for {title}: {e}")
     return ''
 
 def save_page(session, title, text, summary):
@@ -137,29 +132,27 @@ def save_page(session, title, text, summary):
 def process_category_page(session, title):
     categories = get_category_page_categories(session, title)
     cat_count = len(categories)
+    print(f"🔍 {title} is in {cat_count} categories")
+
+    if cat_count < 3:
+        print(f"↪️ Skipping {title} (not in 3 or more categories)")
+        return
 
     content = get_page_content(session, title)
-    if content == '':
+    if not content:
         print(f"⚠️ Page {title} content empty or missing.")
         return
 
     wikicode = mwparserfromhell.parse(content)
     popcat_templates = [t for t in wikicode.filter_templates() if t.name.strip().lower() == 'popcat']
 
-    changed = False
-    if cat_count >= 3:
-        # Remove {{popcat}} if present
-        if popcat_templates:
-            for t in popcat_templates:
-                wikicode.remove(t)
-            changed = True
-            summary = "Removed {{popcat}} (category has 3 or more categories)"
-
-    if changed:
-        if save_page(session, title, str(wikicode), summary):
+    if popcat_templates:
+        for t in popcat_templates:
+            wikicode.remove(t)
+        if save_page(session, title, str(wikicode), "Removed {{popcat}} (3 or more categories)"):
             time.sleep(5)
     else:
-        print(f"No change needed for {title}")
+        print(f"ℹ️ No {{popcat}} on {title}, nothing to remove")
 
 def main():
     username = os.getenv("BOT_USERNAME")
@@ -174,16 +167,15 @@ def main():
     while True:
         pages, apcontinue = get_all_category_pages(session, apcontinue=apcontinue, limit=50)
         if not pages:
-            print("No category pages found.")
             break
 
         for page in pages:
             title = page['title']
-            print(f"Processing category page: {title}")
+            print(f"\n📂 Processing category page: {title}")
             process_category_page(session, title)
 
         if not apcontinue:
-            print("Finished processing all category pages.")
+            print("✅ Done processing all category pages.")
             break
 
 if __name__ == "__main__":
