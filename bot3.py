@@ -148,7 +148,7 @@ def process_category_page(session, title):
 
     if changed:
         if save_page(session, title, str(wikicode), summary):
-            time.sleep(3)  # Pause after a successful edit
+            time.sleep(10)  # Pause after a successful edit
     else:
         print(f"No change needed for {title}")
 
