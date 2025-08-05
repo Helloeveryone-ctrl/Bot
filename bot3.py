@@ -30,17 +30,11 @@ def login_and_get_session(username, password):
         'format': 'json'
     })
 
-    result = r2.json()
-    if result['login']['result'] != 'Success':
-        print(f"❌ Login failed: {result}")
+    if r2.json()['login']['result'] != 'Success':
+        print("Login failed")
         sys.exit(1)
 
-    user = session.get(API_URL, params={
-        'action': 'query',
-        'meta': 'userinfo',
-        'format': 'json'
-    }).json()['query']['userinfo']['name']
-    print(f"✅ Logged in as {user}")
+    print("Logged in successfully.")
     return session
 
 def get_csrf_token(session):
@@ -57,54 +51,37 @@ def get_all_category_pages(session, apcontinue=None, limit=50):
         'list': 'allpages',
         'apnamespace': 14,
         'aplimit': limit,
-        'format': 'json',
+        'format': 'json'
     }
     if apcontinue:
         params['apcontinue'] = apcontinue
+
     r = session.get(API_URL, params=params)
     data = r.json()
-    pages = data.get('query', {}).get('allpages', [])
-    apcontinue = data.get('continue', {}).get('apcontinue', None)
-    return pages, apcontinue
+    return data.get('query', {}).get('allpages', []), data.get('continue', {}).get('apcontinue', None)
 
-def get_category_page_categories(session, title):
-    params = {
+def get_category_member_count(session, category_title):
+    cmparams = {
         'action': 'query',
-        'prop': 'categories',
-        'titles': title,
-        'cllimit': 'max',
-        'clshow': '!hidden',  # only visible categories
+        'list': 'categorymembers',
+        'cmtitle': category_title,
+        'cmlimit': 1,
         'format': 'json'
     }
-    r = session.get(API_URL, params=params)
-    try:
-        data = r.json()
-    except Exception as e:
-        print(f"⚠️ Failed to parse JSON for {title}: {e}")
-        return []
-    pages = data.get('query', {}).get('pages', {})
-    for pageid in pages:
-        cats = pages[pageid].get('categories', [])
-        return [cat['title'] for cat in cats]
-    return []
+    r = session.get(API_URL, params=cmparams)
+    return r.json().get('query', {}).get('categorymembers', []), r.json().get('query-continue')
 
-def get_page_content(session, title):
-    params = {
+def get_category_page_content(session, title):
+    r = session.get(API_URL, params={
         'action': 'query',
         'prop': 'revisions',
-        'titles': title,
         'rvprop': 'content',
+        'titles': title,
         'format': 'json'
-    }
-    r = session.get(API_URL, params=params)
-    try:
-        pages = r.json().get('query', {}).get('pages', {})
-        for pageid in pages:
-            revs = pages[pageid].get('revisions', [])
-            if revs:
-                return revs[0].get('*', '')
-    except Exception as e:
-        print(f"⚠️ Error getting content for {title}: {e}")
+    })
+    pages = r.json().get('query', {}).get('pages', {})
+    for page_id in pages:
+        return pages[page_id].get('revisions', [{}])[0].get('*', '')
     return ''
 
 def save_page(session, title, text, summary):
@@ -120,62 +97,62 @@ def save_page(session, title, text, summary):
         'assert': 'user',
     })
     result = r.json()
-    if 'error' in result:
-        print(f"❌ Edit error on {title}: {result['error']}")
-        return False
     if result.get('edit', {}).get('result') == 'Success':
         print(f"✅ Edited {title}")
-        return True
-    print(f"❌ Unexpected edit response on {title}: {result}")
-    return False
+    else:
+        print(f"❌ Failed to edit {title}: {result}")
 
-def process_category_page(session, title):
-    categories = get_category_page_categories(session, title)
-    cat_count = len(categories)
-    print(f"🔍 {title} is in {cat_count} categories")
+def process_category(session, category_title):
+    members, _ = get_category_member_count(session, category_title)
+    count = len(members)
 
-    if cat_count < 3:
-        print(f"↪️ Skipping {title} (not in 3 or more categories)")
+    if count < 3:
+        print(f"Skipping {category_title}, has less than 3 members")
         return
 
-    content = get_page_content(session, title)
+    # Process the category page content
+    content = get_category_page_content(session, category_title)
     if not content:
-        print(f"⚠️ Page {title} content empty or missing.")
+        print(f"⚠️ Couldn't fetch content for {category_title}")
         return
 
     wikicode = mwparserfromhell.parse(content)
-    popcat_templates = [t for t in wikicode.filter_templates() if t.name.strip().lower() == 'popcat']
+    templates = wikicode.filter_templates()
+    changed = False
 
-    if popcat_templates:
-        for t in popcat_templates:
-            wikicode.remove(t)
-        if save_page(session, title, str(wikicode), "Removed {{popcat}} (3 or more categories)"):
-            time.sleep(5)
-    else:
-        print(f"ℹ️ No {{popcat}} on {title}, nothing to remove")
+    for template in templates:
+        if template.name.strip().lower() == 'popcat':
+            wikicode.remove(template)
+            changed = True
+            print(f"Removing {{popcat}} from {category_title}")
+            break
+
+    if changed:
+        save_page(session, category_title, str(wikicode), "Removed {{popcat}} (3 or more pages in category)")
+        time.sleep(5)  # Delay to avoid hitting the rate limit
 
 def main():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
+
     if not username or not password:
-        print("❌ Missing BOT_USERNAME or BOT_PASSWORD environment variables")
+        print("❌ Missing BOT_USERNAME or BOT_PASSWORD")
         sys.exit(1)
 
     session = login_and_get_session(username, password)
 
     apcontinue = None
     while True:
-        pages, apcontinue = get_all_category_pages(session, apcontinue=apcontinue, limit=50)
+        pages, apcontinue = get_all_category_pages(session, apcontinue=apcontinue)
         if not pages:
             break
 
         for page in pages:
-            title = page['title']
-            print(f"\n📂 Processing category page: {title}")
-            process_category_page(session, title)
+            category_title = page['title']
+            print(f"Checking {category_title}...")
+            process_category(session, category_title)
 
         if not apcontinue:
-            print("✅ Done processing all category pages.")
             break
 
 if __name__ == "__main__":
