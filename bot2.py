@@ -1,6 +1,5 @@
 import os
 import requests
-import datetime
 import sys
 import re
 
@@ -68,7 +67,6 @@ def get_current_page_text(session, title):
 def check_pages_exist(session, titles):
     """Batch check existence of pages. Returns set of titles that exist."""
     existing = set()
-    # Wikipedia API limits max titles per request (max 50 for normal users)
     max_batch = 50
     for i in range(0, len(titles), max_batch):
         batch = titles[i:i+max_batch]
@@ -81,66 +79,21 @@ def check_pages_exist(session, titles):
         data = r.json()
         pages = data.get('query', {}).get('pages', {})
         for page_id, page in pages.items():
-            # pageid == -1 means missing/deleted
             if int(page_id) > 0:
                 existing.add(page['title'])
     return existing
 
-def parse_sections_and_titles(text):
-    """Parse sections with == headers and extract list of page titles from bullet points."""
-    sections = re.split(r'^(==[^=]+==)\s*$', text, flags=re.MULTILINE)
-    # re.split returns list: [before_first_section, header1, content1, header2, content2,...]
-    # So group into [(header, content), ...]
-    section_pairs = []
-    for i in range(1, len(sections), 2):
-        header = sections[i].strip()
-        content = sections[i+1] if (i+1) < len(sections) else ''
-        section_pairs.append((header, content))
-    return section_pairs
-
-def clean_titles_from_content(content):
-    """Extract all page titles from lines like * [[Page title]]"""
+def extract_titles_in_lines(lines):
+    """Extract page titles from lines like '* [[Page title]]'."""
     titles = []
-    for line in content.splitlines():
-        line = line.strip()
-        m = re.match(r'^\*\s*\[\[(.+?)(\|.*)?\]\]', line)
-        if m:
-            titles.append(m.group(1))
-    return titles
-
-def rebuild_section(header, titles):
-    lines = [f"* [[{title}]]" for title in sorted(titles)]
-    return f"{header}\n" + "\n".join(lines) + "\n"
-
-def save_cleaned_page(session, page_title, sections):
-    new_text = ""
-    for header, titles in sections:
-        new_text += rebuild_section(header, titles) + "\n"
-    token = get_csrf_token(session)
-    r = session.post(API_URL, data={
-        'action': 'edit',
-        'title': page_title,
-        'text': new_text.strip(),
-        'token': token,
-        'format': 'json',
-        'bot': True,
-        'summary': 'Removed deleted and duplicate pages from updates (bot)',
-        'assert': 'user',
-    })
-    result = r.json()
-    if 'error' in result:
-        err = result['error']
-        if err.get('code') == 'blocked':
-            print(f"❌ Edit blocked: {err.get('info', '')}")
-            sys.exit(1)
-        else:
-            print(f"❌ Edit error: {err}")
-            sys.exit(1)
-    elif result.get('edit', {}).get('result') == 'Success':
-        print(f"✅ Cleaned and updated page {page_title}")
-    else:
-        print(f"❌ Unexpected edit response: {result}")
-        sys.exit(1)
+    line_map = []
+    pattern = re.compile(r'^\*\s*\[\[(.+?)(?:\|.+)?\]\]')
+    for idx, line in enumerate(lines):
+        match = pattern.match(line)
+        if match:
+            titles.append(match.group(1))
+            line_map.append(idx)
+    return titles, line_map
 
 def run_bot():
     username = os.getenv("BOT_USERNAME")
@@ -157,21 +110,63 @@ def run_bot():
         print(f"ℹ️ Page {page_title} is empty or not found.")
         return
 
-    sections = parse_sections_and_titles(text)
+    lines = text.splitlines()
+    titles, line_indices = extract_titles_in_lines(lines)
 
-    cleaned_sections = []
-    for header, content in sections:
-        titles = clean_titles_from_content(content)
-        if not titles:
-            cleaned_sections.append((header, []))
-            continue
+    if not titles:
+        print("ℹ️ No page links found to check.")
+        return
 
-        existing_titles = check_pages_exist(session, titles)
-        # Remove duplicates by converting to set then back to list sorted
-        unique_existing = sorted(existing_titles)
-        cleaned_sections.append((header, unique_existing))
+    existing_titles = check_pages_exist(session, titles)
 
-    save_cleaned_page(session, page_title, cleaned_sections)
+    seen = set()
+    lines_to_remove = []
+    for title, line_idx in zip(titles, line_indices):
+        if title not in existing_titles:
+            # Mark line for removal: deleted page
+            lines_to_remove.append(line_idx)
+        elif title in seen:
+            # Duplicate page link, mark for removal
+            lines_to_remove.append(line_idx)
+        else:
+            seen.add(title)
+
+    if not lines_to_remove:
+        print("✅ No deleted or duplicate entries found.")
+        return
+
+    # Remove lines marked (in reverse order to keep indexes correct)
+    for idx in sorted(lines_to_remove, reverse=True):
+        del lines[idx]
+
+    new_text = "\n".join(lines)
+
+    token = get_csrf_token(session)
+    r = session.post(API_URL, data={
+        'action': 'edit',
+        'title': page_title,
+        'text': new_text,
+        'token': token,
+        'format': 'json',
+        'bot': True,
+        'summary': 'Removed deleted and duplicate pages from updates (bot)',
+        'assert': 'user',
+    })
+
+    result = r.json()
+    if 'error' in result:
+        err = result['error']
+        if err.get('code') == 'blocked':
+            print(f"❌ Edit blocked: {err.get('info', '')}")
+            sys.exit(1)
+        else:
+            print(f"❌ Edit error: {err}")
+            sys.exit(1)
+    elif result.get('edit', {}).get('result') == 'Success':
+        print(f"✅ Cleaned and updated page {page_title}")
+    else:
+        print(f"❌ Unexpected edit response: {result}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     run_bot()
