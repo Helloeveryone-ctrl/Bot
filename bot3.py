@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import re
 import requests
 import mwparserfromhell
 
@@ -11,32 +10,20 @@ HEADERS = {
     'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
 
-EXEMPT_PATTERNS = [
-    r'\b\d{1,4}s?\s*(BC|AD)?\b',  # years/decades
-    r'\b\d{1,2}(st|nd|rd|th)\s*century\b',
-    r'\b\d{1,4}\s+(births|deaths)\b',
-    r'\b\d{1,4}s?\s+works\b',
-    r'\b\d{1,4}s?\s+(establishments|disestablishments)\b',
-    r'(establishments|disestablishments) in .+? by (century|decade)',
-    r'\b(establishments|disestablishments) by (country|continent)\b',
-    r'\b.*? people\b',
-    r'Category:[A-Z][a-z]+(\s\([a-z]+\))?$',
-    r'IUCN Red List category'
-]
-
-def is_exempt(title):
-    for pattern in EXEMPT_PATTERNS:
-        if re.search(pattern, title, re.IGNORECASE):
-            return True
-    return False
-
 def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    r1 = session.get(API_URL, params={'action': 'query', 'meta': 'tokens', 'type': 'login', 'format': 'json'})
+    # Step 1: Get login token
+    r1 = session.get(API_URL, params={
+        'action': 'query',
+        'meta': 'tokens',
+        'type': 'login',
+        'format': 'json'
+    })
     login_token = r1.json()['query']['tokens']['logintoken']
 
+    # Step 2: Login
     r2 = session.post(API_URL, data={
         'action': 'login',
         'lgname': username,
@@ -52,7 +39,11 @@ def login_and_get_session(username, password):
     return session
 
 def get_csrf_token(session):
-    r = session.get(API_URL, params={'action': 'query', 'meta': 'tokens', 'format': 'json'})
+    r = session.get(API_URL, params={
+        'action': 'query',
+        'meta': 'tokens',
+        'format': 'json'
+    })
     return r.json()['query']['tokens']['csrftoken']
 
 def get_all_category_pages(session, apcontinue=None, limit=50):
@@ -100,13 +91,14 @@ def get_page_content(session, title):
         'prop': 'revisions',
         'titles': title,
         'rvprop': 'content',
+        'rvslots': 'main',
         'format': 'json'
     })
     pages = r.json().get('query', {}).get('pages', {})
     for page in pages.values():
         revs = page.get('revisions', [])
         if revs:
-            return revs[0].get('*', '')
+            return revs[0].get('slots', {}).get('main', {}).get('*', '')
     return ''
 
 def is_redirect(session, title):
@@ -142,6 +134,13 @@ def save_page(session, title, text, summary):
         print(f"❌ Failed to edit {title}: {result}")
         return False
 
+def append_to_log(session, category_title):
+    log_title = "User:Fixinbot/log"
+    current_content = get_page_content(session, log_title) or ""
+    new_entry = f"# [[:{category_title}]]—Removed <nowiki>{{{{popcat}}}}</nowiki>\n"
+    updated_content = current_content.strip() + "\n" + new_entry
+    save_page(session, log_title, updated_content, summary="Logging popcat removal")
+
 def process_category_page(session, title):
     if is_redirect(session, title):
         print(f"⏩ Skipping redirect: {title}")
@@ -150,25 +149,20 @@ def process_category_page(session, title):
     member_pages = get_category_members(session, title)
     num_pages = len(member_pages)
     content = get_page_content(session, title)
+    if not content:
+        print(f"❌ No content for {title}")
+        return
+
     wikicode = mwparserfromhell.parse(content)
     popcat_templates = [t for t in wikicode.filter_templates() if t.name.strip().lower() == "popcat"]
-    has_popcat = bool(popcat_templates)
-    changed = False
 
-    if num_pages >= 3:
-        if has_popcat:
-            for t in popcat_templates:
-                wikicode.remove(t)
-            changed = True
-            summary = "Removing {{popcat}} — 3 or more pages"
-    elif num_pages < 3:
-        if not has_popcat and not is_exempt(title):
-            wikicode.insert(0, "{{popcat}}\n")
-            changed = True
-            summary = "Adding {{popcat}} — fewer than 3 pages and not exempt"
-
-    if changed:
-        save_page(session, title, str(wikicode), summary)
+    if num_pages >= 3 and popcat_templates:
+        for t in popcat_templates:
+            wikicode.remove(t)
+        summary = "Bot: Removing {{popcat}} — 3 or more pages"
+        success = save_page(session, title, str(wikicode), summary)
+        if success:
+            append_to_log(session, title)
         time.sleep(5)
     else:
         print(f"✔ No change for {title}")
