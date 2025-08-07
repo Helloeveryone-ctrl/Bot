@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import re
 import requests
 import mwparserfromhell
 
@@ -15,6 +14,7 @@ def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
+    # Get login token
     r1 = session.get(API_URL, params={
         'action': 'query',
         'meta': 'tokens',
@@ -23,6 +23,7 @@ def login_and_get_session(username, password):
     })
     login_token = r1.json()['query']['tokens']['logintoken']
 
+    # Login
     r2 = session.post(API_URL, data={
         'action': 'login',
         'lgname': username,
@@ -125,7 +126,10 @@ def append_to_log(session, category_title, new_revid, old_revid):
     current_content = get_page_content(session, log_title) or ""
 
     diff_link = f"https://test.wikipedia.org/w/index.php?diff={new_revid}&oldid={old_revid}"
-    new_entry = f"# [[:{category_title}]] — Removed <nowiki>{{{{popcat}}}}</nowiki> ([diff]({diff_link}))\n"
+    new_entry = f"# [[:{category_title}]] — Removed <nowiki>{{{{popcat}}}}</nowiki> [link diff]({diff_link})\n"
+
+    # MediaWiki-style external link formatting
+    new_entry = f"# [[:{category_title}]] — Removed <nowiki>{{{{popcat}}}}</nowiki> [https://test.wikipedia.org/w/index.php?diff={new_revid}&oldid={old_revid} link diff]\n"
 
     updated_content = current_content.strip() + "\n" + new_entry
     save_page(session, log_title, updated_content, summary="Logging popcat removal")
