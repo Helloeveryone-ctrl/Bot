@@ -11,16 +11,10 @@ HEADERS = {
     'User-Agent': 'Fixinbot/1.1 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
 
-EXEMPTION_REGEX = re.compile(
-    r'\b(?:\d{4}s|\d{4} deaths?|by year|by decade|in [A-Z][a-z]+ \d{4}|sovereign states?)\b',
-    re.IGNORECASE
-)
-
 def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Step 1: Get login token
     r1 = session.get(API_URL, params={
         'action': 'query',
         'meta': 'tokens',
@@ -29,7 +23,6 @@ def login_and_get_session(username, password):
     })
     login_token = r1.json()['query']['tokens']['logintoken']
 
-    # Step 2: Login
     r2 = session.post(API_URL, data={
         'action': 'login',
         'lgname': username,
@@ -52,7 +45,7 @@ def get_csrf_token(session):
     })
     return r.json()['query']['tokens']['csrftoken']
 
-def get_category_members(session, category_title):
+def get_category_members(session, category_title, cmtype='page'):
     members = []
     cmcontinue = None
     while True:
@@ -60,7 +53,8 @@ def get_category_members(session, category_title):
             'action': 'query',
             'list': 'categorymembers',
             'cmtitle': category_title,
-            'cmnamespace': 14,
+            'cmnamespace': 0 if cmtype == 'page' else 14,
+            'cmtype': cmtype,
             'cmlimit': 'max',
             'format': 'json'
         }
@@ -118,28 +112,32 @@ def save_page(session, title, text, summary):
     })
     result = r.json()
     if result.get('edit', {}).get('result') == 'Success':
+        new_revid = result['edit'].get('newrevid')
+        old_revid = result['edit'].get('oldrevid')
         print(f"✅ Edited {title} — {summary}")
-        return True
+        return new_revid, old_revid
     else:
         print(f"❌ Failed to edit {title}: {result}")
-        return False
+        return None, None
 
-def append_to_log(session, category_title):
+def append_to_log(session, category_title, new_revid, old_revid):
     log_title = "User:Fixinbot/log"
     current_content = get_page_content(session, log_title) or ""
-    new_entry = f"# [[:{category_title}]] — Removed <nowiki>{{{{popcat}}}}</nowiki>\n"
+
+    diff_link = f"https://test.wikipedia.org/w/index.php?diff={new_revid}&oldid={old_revid}"
+    new_entry = f"# [[:{category_title}]] — Removed <nowiki>{{{{popcat}}}}</nowiki> ([diff]({diff_link}))\n"
+
     updated_content = current_content.strip() + "\n" + new_entry
     save_page(session, log_title, updated_content, summary="Logging popcat removal")
-
-def is_exempted(title):
-    return EXEMPTION_REGEX.search(title)
 
 def process_category(session, title):
     if is_redirect(session, title):
         print(f"⏩ Skipping redirect: {title}")
         return
-    if is_exempted(title):
-        print(f"🚫 Skipping exempted category: {title}")
+
+    page_members = get_category_members(session, title, cmtype='page')
+    if len(page_members) < 3:
+        print(f"ℹ️ Still underpopulated: {title} ({len(page_members)} pages)")
         return
 
     content = get_page_content(session, title)
@@ -153,11 +151,11 @@ def process_category(session, title):
     if popcat_templates:
         for t in popcat_templates:
             wikicode.remove(t)
-        summary = "Bot: Removing {{popcat}} — category underpopulated"
-        success = save_page(session, title, str(wikicode), summary)
-        if success:
-            append_to_log(session, title)
-        time.sleep(8)
+        summary = "Bot: Removing {{popcat}} — now has 3 or more pages"
+        new_revid, old_revid = save_page(session, title, str(wikicode), summary)
+        if new_revid and old_revid:
+            append_to_log(session, title, new_revid, old_revid)
+        time.sleep(5)
     else:
         print(f"✔ No {{popcat}} in {title}")
 
@@ -170,7 +168,7 @@ def main():
 
     session = login_and_get_session(username, password)
 
-    underpopulated_cats = get_category_members(session, "Category:Underpopulated categories")
+    underpopulated_cats = get_category_members(session, "Category:Underpopulated categories", cmtype='subcat')
 
     for cat in underpopulated_cats:
         process_category(session, cat['title'])
