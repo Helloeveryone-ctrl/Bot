@@ -1,14 +1,20 @@
 import os
 import sys
 import time
+import re
 import requests
 import mwparserfromhell
 
 API_URL = "https://test.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/1.0 (https://test.wikipedia.org/wiki/User:Fixinbot)'
+    'User-Agent': 'Fixinbot/1.1 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
+
+EXEMPTION_REGEX = re.compile(
+    r'\b(?:\d{4}s|\d{4} deaths?|by year|by decade|in [A-Z][a-z]+ \d{4}|sovereign states?)\b',
+    re.IGNORECASE
+)
 
 def login_and_get_session(username, password):
     session = requests.Session()
@@ -46,22 +52,6 @@ def get_csrf_token(session):
     })
     return r.json()['query']['tokens']['csrftoken']
 
-def get_all_category_pages(session, apcontinue=None, limit=50):
-    params = {
-        'action': 'query',
-        'list': 'allpages',
-        'apnamespace': 14,
-        'aplimit': limit,
-        'format': 'json',
-    }
-    if apcontinue:
-        params['apcontinue'] = apcontinue
-    r = session.get(API_URL, params=params)
-    data = r.json()
-    pages = data.get('query', {}).get('allpages', [])
-    apcontinue = data.get('continue', {}).get('apcontinue', None)
-    return pages, apcontinue
-
 def get_category_members(session, category_title):
     members = []
     cmcontinue = None
@@ -70,7 +60,7 @@ def get_category_members(session, category_title):
             'action': 'query',
             'list': 'categorymembers',
             'cmtitle': category_title,
-            'cmtype': 'page',
+            'cmnamespace': 14,
             'cmlimit': 'max',
             'format': 'json'
         }
@@ -137,17 +127,21 @@ def save_page(session, title, text, summary):
 def append_to_log(session, category_title):
     log_title = "User:Fixinbot/log"
     current_content = get_page_content(session, log_title) or ""
-    new_entry = f"# [[:{category_title}]]—Removed <nowiki>{{{{popcat}}}}</nowiki>\n"
+    new_entry = f"# [[:{category_title}]] — Removed <nowiki>{{{{popcat}}}}</nowiki>\n"
     updated_content = current_content.strip() + "\n" + new_entry
     save_page(session, log_title, updated_content, summary="Logging popcat removal")
 
-def process_category_page(session, title):
+def is_exempted(title):
+    return EXEMPTION_REGEX.search(title)
+
+def process_category(session, title):
     if is_redirect(session, title):
         print(f"⏩ Skipping redirect: {title}")
         return
+    if is_exempted(title):
+        print(f"🚫 Skipping exempted category: {title}")
+        return
 
-    member_pages = get_category_members(session, title)
-    num_pages = len(member_pages)
     content = get_page_content(session, title)
     if not content:
         print(f"❌ No content for {title}")
@@ -156,16 +150,16 @@ def process_category_page(session, title):
     wikicode = mwparserfromhell.parse(content)
     popcat_templates = [t for t in wikicode.filter_templates() if t.name.strip().lower() == "popcat"]
 
-    if num_pages >= 3 and popcat_templates:
+    if popcat_templates:
         for t in popcat_templates:
             wikicode.remove(t)
-        summary = "Bot: Removing {{popcat}} — 3 or more pages"
+        summary = "Bot: Removing {{popcat}} — category underpopulated"
         success = save_page(session, title, str(wikicode), summary)
         if success:
             append_to_log(session, title)
-        time.sleep(5)
+        time.sleep(8)
     else:
-        print(f"✔ No change for {title}")
+        print(f"✔ No {{popcat}} in {title}")
 
 def main():
     username = os.getenv("BOT_USERNAME")
@@ -176,14 +170,10 @@ def main():
 
     session = login_and_get_session(username, password)
 
-    apcontinue = None
-    while True:
-        pages, apcontinue = get_all_category_pages(session, apcontinue=apcontinue, limit=50)
-        for page in pages:
-            title = page['title']
-            process_category_page(session, title)
-        if not apcontinue:
-            break
+    underpopulated_cats = get_category_members(session, "Category:Underpopulated categories")
+
+    for cat in underpopulated_cats:
+        process_category(session, cat['title'])
 
 if __name__ == "__main__":
     main()
