@@ -7,7 +7,7 @@ import datetime
 API_URL = "https://en.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/1.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
+    'User-Agent': 'Fixinbot/1.1 (https://en.wikipedia.org/wiki/User:Fixinbot)'
 }
 
 def login_and_get_session(username, password):
@@ -66,15 +66,18 @@ def get_current_page_text(session, title):
     return ''
 
 def check_pages_exist(session, titles):
-    """Batch check existence of pages. Returns set of titles that exist."""
+    """Batch check existence and redirect status. Returns sets of (existing titles, redirect titles)."""
     existing = set()
+    redirects = set()
     max_batch = 50
     for i in range(0, len(titles), max_batch):
         batch = titles[i:i+max_batch]
         params = {
             'action': 'query',
             'titles': '|'.join(batch),
-            'format': 'json'
+            'prop': 'info',
+            'format': 'json',
+            'redirects': 1
         }
         r = session.get(API_URL, params=params)
         data = r.json()
@@ -82,7 +85,9 @@ def check_pages_exist(session, titles):
         for page_id, page in pages.items():
             if int(page_id) > 0:
                 existing.add(page['title'])
-    return existing
+                if 'redirect' in page:
+                    redirects.add(page['title'])
+    return existing, redirects
 
 def extract_titles_in_lines(lines):
     """Extract page titles from lines like '* [[Page title]]'."""
@@ -150,29 +155,29 @@ def run_bot():
     # Remove old sections
     lines = remove_old_sections(lines, days=7)
 
-    # Now remove deleted and duplicate pages as before
+    # Extract page links from remaining lines
     titles, line_indices = extract_titles_in_lines(lines)
-
     if not titles:
         print("ℹ️ No page links found to check.")
         return
 
-    existing_titles = check_pages_exist(session, titles)
+    # Check which pages exist and which are redirects
+    existing_titles, redirect_titles = check_pages_exist(session, titles)
 
+    # Determine which lines to remove
     seen = set()
     lines_to_remove = []
     for title, line_idx in zip(titles, line_indices):
         if title not in existing_titles:
-            # Mark line for removal: deleted page
-            lines_to_remove.append(line_idx)
+            lines_to_remove.append(line_idx)  # Deleted page
+        elif title in redirect_titles:
+            lines_to_remove.append(line_idx)  # Redirect
         elif title in seen:
-            # Duplicate page link, mark for removal
-            lines_to_remove.append(line_idx)
+            lines_to_remove.append(line_idx)  # Duplicate
         else:
             seen.add(title)
 
     if lines_to_remove:
-        # Remove lines marked (in reverse order to keep indexes correct)
         for idx in sorted(lines_to_remove, reverse=True):
             del lines[idx]
 
@@ -186,7 +191,7 @@ def run_bot():
             'token': token,
             'format': 'json',
             'bot': True,
-            'summary': 'Removed deleted, duplicate, and entries older than 7 days (bot)',
+            'summary': 'Removed deleted, duplicate, redirect, and old entries (bot)',
             'assert': 'user',
         })
 
@@ -205,7 +210,7 @@ def run_bot():
             print(f"❌ Unexpected edit response: {result}")
             sys.exit(1)
     else:
-        print("✅ No deleted, duplicate, or old entries found.")
+        print("✅ No deleted, redirect, duplicate, or old entries found.")
 
 if __name__ == "__main__":
     run_bot()
