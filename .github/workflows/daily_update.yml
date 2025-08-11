@@ -1,12 +1,12 @@
-name: Update Hourly
+name: Update Weekly
 
 on:
   schedule:
-    - cron: '0 * * * *'  # every hour
+    - cron: '0 0 * * 1'  # every Monday at 00:00 UTC
   workflow_dispatch:
 
 jobs:
-  run-hourly-bots:
+  run-weekly-bots:
     runs-on: ubuntu-latest
 
     steps:
@@ -30,9 +30,9 @@ jobs:
         run: |
           python bot.py
 
-      - name: Run bot2.py
+      - name: Run bot3.py
         env:
           BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
           BOT_PASSWORD: ${{ secrets.BOT_PASSWORD }}
         run: |
-          python bot2.py
+          python bot3.py
