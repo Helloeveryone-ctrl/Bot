@@ -1,12 +1,12 @@
-name: Update Daily
+name: Update Weekly
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # every day at midnight UTC
+    - cron: '0 0 * * 1'  # every Monday at 00:00 UTC
   workflow_dispatch:
 
 jobs:
-  run-daily-bot:
+  run-weekly-bots:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,6 +22,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests mwparserfromhell
+
+      - name: Run bot.py
+        env:
+          BOT_USERNAME: ${{ secrets.BOT_USERNAME }}
+          BOT_PASSWORD: ${{ secrets.BOT_PASSWORD }}
+        run: |
+          python bot.py
 
       - name: Run bot3.py
         env:
