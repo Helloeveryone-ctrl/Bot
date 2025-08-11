@@ -4,10 +4,10 @@ import sys
 import re
 import datetime
 
-API_URL = "https://en.wikipedia.org/w/api.php"
+API_URL = "https://test.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/1.1 (https://en.wikipedia.org/wiki/User:Fixinbot)'
+    'User-Agent': 'Fixinbot/1.1 (https://test.wikipedia.org/wiki/User:Fixinbot)'
 }
 
 DECLINE_IP = '103.239.4.205'  # IP used in bot signature in declined message
