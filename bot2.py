@@ -89,10 +89,10 @@ def check_pages_exist(session, titles):
     return existing, redirects
 
 def extract_titles_from_table(lines):
-    """Extract page titles from table rows like: | [[Page title]]"""
+    """Extract page titles and row indices from table rows like: | <num> || [[Page]]"""
     titles = []
     row_indices = []
-    pattern = re.compile(r'^\|\s*\[\[(.+?)(?:\|.+)?\]\]')
+    pattern = re.compile(r'^\|\s*\d+\s*\|\|\s*\[\[(.+?)(?:\|.+)?\]\]')
     for idx, line in enumerate(lines):
         match = pattern.match(line.strip())
         if match:
@@ -130,6 +130,31 @@ def remove_old_sections(lines, days=7):
         new_lines.extend(section_buffer)
     return new_lines
 
+def renumber_table(lines):
+    """Renumber the first column of the table sequentially for each section."""
+    renumbered = []
+    num = 1
+    in_table = False
+    for line in lines:
+        if line.startswith('{|'):
+            in_table = True
+            renumbered.append(line)
+            num = 1
+        elif line.startswith('|}'):
+            in_table = False
+            renumbered.append(line)
+        elif in_table and line.strip().startswith('|') and '||' in line:
+            parts = line.split('||', 1)
+            if parts[0].strip().lstrip('|').strip().isdigit():
+                # Replace number
+                renumbered.append(f"| {num} ||{parts[1]}")
+                num += 1
+            else:
+                renumbered.append(line)
+        else:
+            renumbered.append(line)
+    return renumbered
+
 def run_bot():
     username = os.getenv("BOT_USERNAME")
     password = os.getenv("BOT_PASSWORD")
@@ -148,7 +173,7 @@ def run_bot():
     lines = text.splitlines()
     lines = remove_old_sections(lines, days=7)
 
-    # Extract titles from wikitable rows
+    # Extract titles from table rows
     titles, row_indices = extract_titles_from_table(lines)
     if not titles:
         print("ℹ️ No page links found in tables.")
@@ -172,6 +197,9 @@ def run_bot():
         for idx in sorted(rows_to_remove, reverse=True):
             del lines[idx]
 
+        # Renumber the # column after removals
+        lines = renumber_table(lines)
+
         new_text = "\n".join(lines)
 
         token = get_csrf_token(session)
@@ -182,7 +210,7 @@ def run_bot():
             'token': token,
             'format': 'json',
             'bot': True,
-            'summary': 'Removed deleted, duplicate, redirect, and old table rows (bot)',
+            'summary': 'Removed deleted/duplicate/redirect rows and renumbered table (bot)',
             'assert': 'user',
         })
 
@@ -196,7 +224,7 @@ def run_bot():
                 print(f"❌ Edit error: {err}")
                 sys.exit(1)
         elif result.get('edit', {}).get('result') == 'Success':
-            print(f"✅ Cleaned and updated table in {page_title}")
+            print(f"✅ Cleaned, renumbered, and updated table in {page_title}")
         else:
             print(f"❌ Unexpected edit response: {result}")
             sys.exit(1)
