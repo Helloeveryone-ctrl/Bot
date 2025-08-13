@@ -66,7 +66,6 @@ def get_current_page_text(session, title):
     return ''
 
 def check_pages_exist(session, titles):
-    """Batch check existence and redirect status. Returns sets of (existing titles, redirect titles)."""
     existing = set()
     redirects = set()
     max_batch = 50
@@ -89,21 +88,20 @@ def check_pages_exist(session, titles):
                     redirects.add(page['title'])
     return existing, redirects
 
-def extract_titles_in_lines(lines):
-    """Extract page titles from lines like '* [[Page title]]'."""
+def extract_titles_from_table(lines):
+    """Extract page titles from table rows like: | [[Page title]]"""
     titles = []
-    line_map = []
-    pattern = re.compile(r'^\*\s*\[\[(.+?)(?:\|.+)?\]\]')
+    row_indices = []
+    pattern = re.compile(r'^\|\s*\[\[(.+?)(?:\|.+)?\]\]')
     for idx, line in enumerate(lines):
-        match = pattern.match(line)
+        match = pattern.match(line.strip())
         if match:
             titles.append(match.group(1))
-            line_map.append(idx)
-    return titles, line_map
+            row_indices.append(idx)
+    return titles, row_indices
 
 def remove_old_sections(lines, days=7):
-    """Remove sections older than given days.
-    Assumes sections start with lines like == YYYY-MM-DD HH:MM UTC ==."""
+    """Remove sections older than given days. Keeps table integrity."""
     new_lines = []
     current_section_date = None
     section_buffer = []
@@ -115,22 +113,19 @@ def remove_old_sections(lines, days=7):
         try:
             section_date = datetime.datetime.strptime(section_date_str, "%Y-%m-%d %H:%M UTC")
         except Exception:
-            return True  # If cannot parse, keep section
+            return True
         age = now - section_date
         return age.days < days
 
     for line in lines:
         m = date_pattern.match(line)
         if m:
-            # New section started: flush previous section if recent
             if current_section_date is None or section_is_recent(current_section_date):
                 new_lines.extend(section_buffer)
-            # Reset for new section
             current_section_date = m.group(1)
             section_buffer = [line]
         else:
             section_buffer.append(line)
-    # Flush last section
     if current_section_date is None or section_is_recent(current_section_date):
         new_lines.extend(section_buffer)
     return new_lines
@@ -151,34 +146,30 @@ def run_bot():
         return
 
     lines = text.splitlines()
-
-    # Remove old sections
     lines = remove_old_sections(lines, days=7)
 
-    # Extract page links from remaining lines
-    titles, line_indices = extract_titles_in_lines(lines)
+    # Extract titles from wikitable rows
+    titles, row_indices = extract_titles_from_table(lines)
     if not titles:
-        print("ℹ️ No page links found to check.")
+        print("ℹ️ No page links found in tables.")
         return
 
-    # Check which pages exist and which are redirects
     existing_titles, redirect_titles = check_pages_exist(session, titles)
 
-    # Determine which lines to remove
     seen = set()
-    lines_to_remove = []
-    for title, line_idx in zip(titles, line_indices):
+    rows_to_remove = []
+    for title, row_idx in zip(titles, row_indices):
         if title not in existing_titles:
-            lines_to_remove.append(line_idx)  # Deleted page
+            rows_to_remove.append(row_idx)
         elif title in redirect_titles:
-            lines_to_remove.append(line_idx)  # Redirect
+            rows_to_remove.append(row_idx)
         elif title in seen:
-            lines_to_remove.append(line_idx)  # Duplicate
+            rows_to_remove.append(row_idx)
         else:
             seen.add(title)
 
-    if lines_to_remove:
-        for idx in sorted(lines_to_remove, reverse=True):
+    if rows_to_remove:
+        for idx in sorted(rows_to_remove, reverse=True):
             del lines[idx]
 
         new_text = "\n".join(lines)
@@ -191,7 +182,7 @@ def run_bot():
             'token': token,
             'format': 'json',
             'bot': True,
-            'summary': 'Removed deleted, duplicate, redirect, and old entries (bot)',
+            'summary': 'Removed deleted, duplicate, redirect, and old table rows (bot)',
             'assert': 'user',
         })
 
@@ -205,12 +196,12 @@ def run_bot():
                 print(f"❌ Edit error: {err}")
                 sys.exit(1)
         elif result.get('edit', {}).get('result') == 'Success':
-            print(f"✅ Cleaned and updated page {page_title}")
+            print(f"✅ Cleaned and updated table in {page_title}")
         else:
             print(f"❌ Unexpected edit response: {result}")
             sys.exit(1)
     else:
-        print("✅ No deleted, redirect, duplicate, or old entries found.")
+        print("✅ No deleted, redirect, duplicate, or old table rows found.")
 
 if __name__ == "__main__":
     run_bot()
