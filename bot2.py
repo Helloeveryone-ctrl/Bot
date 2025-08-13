@@ -7,7 +7,7 @@ import datetime
 API_URL = "https://en.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/1.1 (https://en.wikipedia.org/wiki/User:Fixinbot)'
+    'User-Agent': 'Fixinbot/1.2 (https://en.wikipedia.org/wiki/User:Fixinbot)'
 }
 
 def login_and_get_session(username, password):
@@ -58,14 +58,11 @@ def get_current_page_text(session, title):
         'prop': 'revisions',
         'titles': title,
         'rvprop': 'content',
-        'rvslots': 'main',
-        'formatversion': 2,
         'format': 'json'
     })
-    data = r.json()
-    pages = data.get('query', {}).get('pages', [])
-    if pages and 'revisions' in pages[0]:
-        return pages[0]['revisions'][0]['slots']['main']['content']
+    pages = r.json()['query']['pages']
+    for page_id in pages:
+        return pages[page_id].get('revisions', [{}])[0].get('*', '')
     return ''
 
 def check_pages_exist(session, titles):
@@ -83,34 +80,60 @@ def check_pages_exist(session, titles):
         }
         r = session.get(API_URL, params=params)
         data = r.json()
-
-        # Track redirects from top-level 'redirects' array
-        if 'redirects' in data.get('query', {}):
-            for red in data['query']['redirects']:
-                redirects.add(red['from'])
-
         pages = data.get('query', {}).get('pages', {})
         for page_id, page in pages.items():
-            if int(page_id) > 0:  # page exists
+            if int(page_id) > 0:
                 existing.add(page['title'])
+                if 'redirect' in page:
+                    redirects.add(page['title'])
     return existing, redirects
 
 def extract_titles_from_table(lines):
+    """
+    Extract page titles and row indices from table rows.
+    Supports multi-line rows like:
+    |-
+    | 1
+    | [[Page]]
+    """
     titles = []
     row_indices = []
-    # Match table rows with [[Title]] or [[Title|Display]]
-    pattern = re.compile(r'^\|\s*\d+\s*\|\|\s*\[\[([^\|\]]+)(?:\|.*?)?\]\]')
+    row_lines = []
+    row_start = None
+
     for idx, line in enumerate(lines):
-        match = pattern.match(line.strip())
-        if match:
-            titles.append(match.group(1).strip())
-            row_indices.append(idx)
+        line_strip = line.strip()
+        if line_strip.startswith("|-"):  # new row
+            # process previous row
+            if row_lines:
+                for l in row_lines:
+                    m = re.search(r'\[\[([^\|\]]+)(?:\|.*?)?\]\]', l)
+                    if m:
+                        titles.append(m.group(1).strip())
+                        row_indices.append(row_start)
+                        break
+            row_start = idx
+            row_lines = []
+        elif line_strip.startswith("|") and row_start is not None:
+            row_lines.append(line_strip)
+
+    # process last row
+    if row_lines:
+        for l in row_lines:
+            m = re.search(r'\[\[([^\|\]]+)(?:\|.*?)?\]\]', l)
+            if m:
+                titles.append(m.group(1).strip())
+                row_indices.append(row_start)
+                break
+
     return titles, row_indices
 
 def remove_old_sections(lines, days=7):
+    """Remove sections older than given days."""
     new_lines = []
     current_section_date = None
     section_buffer = []
+
     date_pattern = re.compile(r'^==\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC)\s*==\s*$')
     now = datetime.datetime.utcnow()
 
@@ -131,30 +154,27 @@ def remove_old_sections(lines, days=7):
             section_buffer = [line]
         else:
             section_buffer.append(line)
-
     if current_section_date is None or section_is_recent(current_section_date):
         new_lines.extend(section_buffer)
     return new_lines
 
 def renumber_table(lines):
+    """Renumber the first numeric column in tables."""
     renumbered = []
     num = 1
     in_table = False
     for line in lines:
-        if line.startswith('{|'):
+        if line.startswith("{|"):
             in_table = True
             renumbered.append(line)
             num = 1
-        elif line.startswith('|}'):
+        elif line.startswith("|}"):
             in_table = False
             renumbered.append(line)
-        elif in_table and line.strip().startswith('|') and '||' in line and not line.strip().startswith('!'):
-            parts = line.split('||', 1)
-            if parts[0].strip().lstrip('|').strip().isdigit():
-                renumbered.append(f"| {num} ||{parts[1]}")
-                num += 1
-            else:
-                renumbered.append(line)
+        elif in_table and line.strip().startswith("|") and line.strip()[1:].strip().isdigit():
+            # replace number line
+            renumbered.append(f"| {num}")
+            num += 1
         else:
             renumbered.append(line)
     return renumbered
@@ -177,6 +197,7 @@ def run_bot():
     lines = text.splitlines()
     lines = remove_old_sections(lines, days=7)
 
+    # Extract titles from table rows
     titles, row_indices = extract_titles_from_table(lines)
     if not titles:
         print("ℹ️ No page links found in tables.")
@@ -194,10 +215,18 @@ def run_bot():
 
     if rows_to_remove:
         for idx in sorted(rows_to_remove, reverse=True):
-            del lines[idx]
+            # remove row: from start of "|-" to next "|-" or "|}"
+            start_idx = idx
+            end_idx = idx + 1
+            while end_idx < len(lines) and not lines[end_idx].strip().startswith("|-") and not lines[end_idx].strip().startswith("|}"):
+                end_idx += 1
+            del lines[start_idx:end_idx]
+
+        # Renumber tables after removal
         lines = renumber_table(lines)
 
         new_text = "\n".join(lines)
+
         token = get_csrf_token(session)
         r = session.post(API_URL, data={
             'action': 'edit',
@@ -206,22 +235,26 @@ def run_bot():
             'token': token,
             'format': 'json',
             'bot': True,
-            'summary': 'Removed deleted, redirect, duplicate, and old rows; renumbered table (bot)',
+            'summary': 'Removed deleted/redirect/duplicate rows and renumbered table (bot)',
             'assert': 'user',
         })
 
         result = r.json()
         if 'error' in result:
             err = result['error']
-            print(f"❌ Edit error: {err}")
-            sys.exit(1)
+            if err.get('code') == 'blocked':
+                print(f"❌ Edit blocked: {err.get('info', '')}")
+                sys.exit(1)
+            else:
+                print(f"❌ Edit error: {err}")
+                sys.exit(1)
         elif result.get('edit', {}).get('result') == 'Success':
-            print(f"✅ Cleaned and updated table in {page_title}")
+            print(f"✅ Cleaned, renumbered, and updated table in {page_title}")
         else:
             print(f"❌ Unexpected edit response: {result}")
             sys.exit(1)
     else:
-        print("✅ No deletions, redirects, duplicates, or outdated rows found.")
+        print("✅ No deleted, redirect, duplicate, or old table rows found.")
 
 if __name__ == "__main__":
     run_bot()
