@@ -110,9 +110,21 @@ def save_to_page(session, page_title, lines):
     now = datetime.datetime.utcnow()
     timestamp = now.strftime('%Y-%m-%d %H:%M UTC')
     section_header = f"== {timestamp} ==\n"
-    section_content = "\n".join(f"* [[{title}]]" for title in lines)
 
-    new_section = f"{section_header}{section_content}\n\n"
+    # Build wikitext table
+    table_lines = [
+        '{| class="wikitable sortable"',
+        '! #',
+        '! Page'
+    ]
+    for i, title in enumerate(lines, start=1):
+        table_lines.append('|-')
+        table_lines.append(f'| {i}')
+        table_lines.append(f'| [[{title}]]')
+    table_lines.append('|}')
+
+    section_content = "\n".join(table_lines) + "\n\n"
+    new_section = section_header + section_content
 
     existing_text = get_current_page_text(session, page_title)
     new_text = new_section + existing_text
@@ -126,7 +138,7 @@ def save_to_page(session, page_title, lines):
         'token': token,
         'format': 'json',
         'bot': True,
-        'summary': f'Added section for {timestamp} (bot)',
+        'summary': f'Added table for {timestamp} (bot)',
         'assert': 'user',
     })
 
@@ -136,8 +148,7 @@ def save_to_page(session, page_title, lines):
         err = result['error']
         if err.get('code') == 'blocked':
             print(f"❌ Edit blocked: {err.get('info', '')}")
-            print("💡 IP blocked by Wikimedia. Exiting for GitHub Actions to retry.")
-            sys.exit(1)  # Fail fast so GitHub Actions can auto-rerun
+            sys.exit(1)
         else:
             print(f"❌ Edit error: {err}")
             sys.exit(1)
