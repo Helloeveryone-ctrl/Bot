@@ -58,11 +58,14 @@ def get_current_page_text(session, title):
         'prop': 'revisions',
         'titles': title,
         'rvprop': 'content',
+        'rvslots': 'main',
+        'formatversion': 2,
         'format': 'json'
     })
-    pages = r.json()['query']['pages']
-    for page_id in pages:
-        return pages[page_id].get('revisions', [{}])[0].get('*', '')
+    data = r.json()
+    pages = data.get('query', {}).get('pages', [])
+    if pages and 'revisions' in pages[0]:
+        return pages[0]['revisions'][0]['slots']['main']['content']
     return ''
 
 def check_pages_exist(session, titles):
@@ -80,32 +83,34 @@ def check_pages_exist(session, titles):
         }
         r = session.get(API_URL, params=params)
         data = r.json()
+
+        # Track redirects from top-level 'redirects' array
+        if 'redirects' in data.get('query', {}):
+            for red in data['query']['redirects']:
+                redirects.add(red['from'])
+
         pages = data.get('query', {}).get('pages', {})
         for page_id, page in pages.items():
-            if int(page_id) > 0:
+            if int(page_id) > 0:  # page exists
                 existing.add(page['title'])
-                if 'redirect' in page:
-                    redirects.add(page['title'])
     return existing, redirects
 
 def extract_titles_from_table(lines):
-    """Extract page titles and row indices from table rows like: | <num> || [[Page]]"""
     titles = []
     row_indices = []
-    pattern = re.compile(r'^\|\s*\d+\s*\|\|\s*\[\[(.+?)(?:\|.+)?\]\]')
+    # Match table rows with [[Title]] or [[Title|Display]]
+    pattern = re.compile(r'^\|\s*\d+\s*\|\|\s*\[\[([^\|\]]+)(?:\|.*?)?\]\]')
     for idx, line in enumerate(lines):
         match = pattern.match(line.strip())
         if match:
-            titles.append(match.group(1))
+            titles.append(match.group(1).strip())
             row_indices.append(idx)
     return titles, row_indices
 
 def remove_old_sections(lines, days=7):
-    """Remove sections older than given days. Keeps table integrity."""
     new_lines = []
     current_section_date = None
     section_buffer = []
-
     date_pattern = re.compile(r'^==\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC)\s*==\s*$')
     now = datetime.datetime.utcnow()
 
@@ -126,12 +131,12 @@ def remove_old_sections(lines, days=7):
             section_buffer = [line]
         else:
             section_buffer.append(line)
+
     if current_section_date is None or section_is_recent(current_section_date):
         new_lines.extend(section_buffer)
     return new_lines
 
 def renumber_table(lines):
-    """Renumber the first column of the table sequentially for each section."""
     renumbered = []
     num = 1
     in_table = False
@@ -143,10 +148,9 @@ def renumber_table(lines):
         elif line.startswith('|}'):
             in_table = False
             renumbered.append(line)
-        elif in_table and line.strip().startswith('|') and '||' in line:
+        elif in_table and line.strip().startswith('|') and '||' in line and not line.strip().startswith('!'):
             parts = line.split('||', 1)
             if parts[0].strip().lstrip('|').strip().isdigit():
-                # Replace number
                 renumbered.append(f"| {num} ||{parts[1]}")
                 num += 1
             else:
@@ -173,7 +177,6 @@ def run_bot():
     lines = text.splitlines()
     lines = remove_old_sections(lines, days=7)
 
-    # Extract titles from table rows
     titles, row_indices = extract_titles_from_table(lines)
     if not titles:
         print("ℹ️ No page links found in tables.")
@@ -184,11 +187,7 @@ def run_bot():
     seen = set()
     rows_to_remove = []
     for title, row_idx in zip(titles, row_indices):
-        if title not in existing_titles:
-            rows_to_remove.append(row_idx)
-        elif title in redirect_titles:
-            rows_to_remove.append(row_idx)
-        elif title in seen:
+        if title not in existing_titles or title in redirect_titles or title in seen:
             rows_to_remove.append(row_idx)
         else:
             seen.add(title)
@@ -196,12 +195,9 @@ def run_bot():
     if rows_to_remove:
         for idx in sorted(rows_to_remove, reverse=True):
             del lines[idx]
-
-        # Renumber the # column after removals
         lines = renumber_table(lines)
 
         new_text = "\n".join(lines)
-
         token = get_csrf_token(session)
         r = session.post(API_URL, data={
             'action': 'edit',
@@ -210,26 +206,22 @@ def run_bot():
             'token': token,
             'format': 'json',
             'bot': True,
-            'summary': 'Removed deleted/duplicate/redirect rows and renumbered table (bot)',
+            'summary': 'Removed deleted, redirect, duplicate, and old rows; renumbered table (bot)',
             'assert': 'user',
         })
 
         result = r.json()
         if 'error' in result:
             err = result['error']
-            if err.get('code') == 'blocked':
-                print(f"❌ Edit blocked: {err.get('info', '')}")
-                sys.exit(1)
-            else:
-                print(f"❌ Edit error: {err}")
-                sys.exit(1)
+            print(f"❌ Edit error: {err}")
+            sys.exit(1)
         elif result.get('edit', {}).get('result') == 'Success':
-            print(f"✅ Cleaned, renumbered, and updated table in {page_title}")
+            print(f"✅ Cleaned and updated table in {page_title}")
         else:
             print(f"❌ Unexpected edit response: {result}")
             sys.exit(1)
     else:
-        print("✅ No deleted, redirect, duplicate, or old table rows found.")
+        print("✅ No deletions, redirects, duplicates, or outdated rows found.")
 
 if __name__ == "__main__":
     run_bot()
