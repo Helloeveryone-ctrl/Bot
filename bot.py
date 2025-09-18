@@ -2,11 +2,12 @@ import os
 import requests
 import sys
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/3.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
+    'User-Agent': 'Fixinbot/4.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
 }
 
 
@@ -14,7 +15,6 @@ def login_and_get_session(username, password):
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Get login token
     r1 = session.get(API_URL, params={
         'action': 'query',
         'meta': 'tokens',
@@ -23,7 +23,6 @@ def login_and_get_session(username, password):
     })
     login_token = r1.json()['query']['tokens']['logintoken']
 
-    # Login
     r2 = session.post(API_URL, data={
         'action': 'login',
         'lgname': username,
@@ -41,7 +40,6 @@ def login_and_get_session(username, password):
 
 
 def get_admins(session):
-    """Fetch all sysops (admins)."""
     admins = []
     aufrom = None
     while True:
@@ -67,73 +65,69 @@ def get_admins(session):
     return admins
 
 
-def get_last_activities(session, admins):
-    """Fetch last edit and log for all admins in batches, newest first."""
-    batch_size = 50
-    results = {}
+def fetch_user_activity(session, username):
+    """Fetch last edit and last log for a single user."""
+    last_edit = "—"
+    last_log = "—"
 
-    for i in range(0, len(admins), batch_size):
-        chunk = admins[i:i+batch_size]
-        userlist = "|".join(chunk)
+    # Last edit
+    r1 = session.get(API_URL, params={
+        'action': 'query',
+        'list': 'usercontribs',
+        'ucuser': username,
+        'uclimit': 1,
+        'ucprop': 'timestamp|title',
+        'ucdir': 'older',  # newest first
+        'format': 'json'
+    })
+    contribs = r1.json().get('query', {}).get('usercontribs', [])
+    if contribs:
+        last_edit = contribs[0]['timestamp']
 
-        # Last contribution (most recent)
-        r1 = session.get(API_URL, params={
-            'action': 'query',
-            'list': 'usercontribs',
-            'ucuser': userlist,
-            'uclimit': 1,
-            'ucprop': 'timestamp|user',
-            'ucdir': 'newer',  # newest edit
-            'format': 'json'
-        })
-        for c in r1.json().get('query', {}).get('usercontribs', []):
-            results.setdefault(c['user'], {})['last_edit'] = c['timestamp']
+    # Last log
+    r2 = session.get(API_URL, params={
+        'action': 'query',
+        'list': 'logevents',
+        'leuser': username,
+        'lelimit': 1,
+        'ledir': 'older',  # newest first
+        'format': 'json'
+    })
+    logs = r2.json().get('query', {}).get('logevents', [])
+    if logs:
+        last_log = logs[0]['timestamp']
 
-        # Last log (most recent)
-        r2 = session.get(API_URL, params={
-            'action': 'query',
-            'list': 'logevents',
-            'leuser': userlist,
-            'lelimit': 1,
-            'ledir': 'newer',  # newest log
-            'format': 'json'
-        })
-        for l in r2.json().get('query', {}).get('logevents', []):
-            results.setdefault(l['user'], {})['last_log'] = l['timestamp']
+    if last_edit != "—" and last_log != "—":
+        last_activity = max(last_edit, last_log)
+    elif last_edit != "—":
+        last_activity = last_edit
+    elif last_log != "—":
+        last_activity = last_log
+    else:
+        last_activity = None
 
-    # Normalize
-    output = []
-    for user in admins:
-        last_edit = results.get(user, {}).get('last_edit', "—")
-        last_log = results.get(user, {}).get('last_log', "—")
+    return {
+        'username': username,
+        'last_edit': last_edit,
+        'last_log': last_log,
+        'last_activity': last_activity
+    }
 
-        if last_edit != "—" and last_log != "—":
-            last_activity = max(last_edit, last_log)
-        elif last_edit != "—":
-            last_activity = last_edit
-        elif last_log != "—":
-            last_activity = last_log
-        else:
-            last_activity = None
 
-        output.append({
-            "username": user,
-            "last_edit": last_edit,
-            "last_log": last_log,
-            "last_activity": last_activity
-        })
-
-    # Sort by recency
-    output.sort(key=lambda x: x['last_activity'] or "0000", reverse=True)
-    return output
+def get_all_activities(session, admins):
+    """Fetch all admins' activities in parallel."""
+    results = []
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_user = {executor.submit(fetch_user_activity, session, user): user for user in admins}
+        for future in as_completed(future_to_user):
+            result = future.result()
+            results.append(result)
+    results.sort(key=lambda x: x['last_activity'] or "0000", reverse=True)
+    return results
 
 
 def get_csrf_token(session):
-    r = session.get(API_URL, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'format': 'json'
-    })
+    r = session.get(API_URL, params={'action': 'query', 'meta': 'tokens', 'format': 'json'})
     return r.json()['query']['tokens']['csrftoken']
 
 
@@ -153,7 +147,6 @@ def get_current_page_text(session, title):
 
 
 def save_to_page(session, page_title, admins_data):
-    # Build wikitable
     table_lines = [
         '{| class="wikitable sortable"',
         '! Rank',
@@ -168,17 +161,16 @@ def save_to_page(session, page_title, admins_data):
         table_lines.append(f'| {admin["last_edit"]}')
         table_lines.append(f'| {admin["last_log"]}')
     table_lines.append('|}')
-
     new_table = "\n".join(table_lines)
+
     current_text = get_current_page_text(session, page_title)
 
     if re.search(r'\{\| class="wikitable sortable".*?\|\}', current_text, re.S):
         new_text = re.sub(r'\{\| class="wikitable sortable".*?\|\}', new_table, current_text, flags=re.S)
     else:
-        new_text = current_text + "\n\n" + new_table
+        new_text = current_text + "\n\n== Active admins ==\n" + new_table
 
     token = get_csrf_token(session)
-
     r = session.post(API_URL, data={
         'action': 'edit',
         'title': page_title,
@@ -213,7 +205,7 @@ def run_bot():
     admins = get_admins(session)
     print(f"👥 Found {len(admins)} admins")
 
-    admins_data = get_last_activities(session, admins)
+    admins_data = get_all_activities(session, admins)
     save_to_page(session, save_page, admins_data)
 
 
