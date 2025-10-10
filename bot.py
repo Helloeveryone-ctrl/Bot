@@ -2,6 +2,7 @@ import os
 import requests
 import sys
 import re
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 API_URL = "https://en.wikipedia.org/w/api.php"
@@ -9,6 +10,17 @@ API_URL = "https://en.wikipedia.org/w/api.php"
 HEADERS = {
     'User-Agent': 'Fixinbot/4.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
 }
+
+
+def format_timestamp(ts):
+    """Convert ISO timestamp (e.g., 2025-10-10T03:41:22Z) to readable format with commas."""
+    if ts in ("—", None):
+        return "—"
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+        return dt.strftime("%B %d, %Y, %H:%M:%S UTC")
+    except Exception:
+        return ts  # fallback
 
 
 def login_and_get_session(username, password):
@@ -158,8 +170,8 @@ def save_to_page(session, page_title, admins_data):
         table_lines.append('|-')
         table_lines.append(f'| {i}')
         table_lines.append(f'| [[User:{admin["username"]}|{admin["username"]}]]')
-        table_lines.append(f'| {admin["last_edit"]}')
-        table_lines.append(f'| {admin["last_log"]}')
+        table_lines.append(f'| {format_timestamp(admin["last_edit"])}')
+        table_lines.append(f'| {format_timestamp(admin["last_log"])}')
     table_lines.append('|}')
     new_table = "\n".join(table_lines)
 
