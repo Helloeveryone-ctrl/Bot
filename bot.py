@@ -8,19 +8,28 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 API_URL = "https://en.wikipedia.org/w/api.php"
 
 HEADERS = {
-    'User-Agent': 'Fixinbot/4.0 (https://en.wikipedia.org/wiki/User:Fixinbot)'
+    "User-Agent": "Fixinbot/4.1 (https://en.wikipedia.org/wiki/User:Fixinbot)"
 }
 
 
+def safe_json(response, context=""):
+    """Safely parse JSON responses."""
+    try:
+        return response.json()
+    except Exception:
+        print(f"⚠️ Non-JSON response during {context}")
+        print(response.text[:200])
+        return {}
+
+
 def format_timestamp(ts):
-    """Convert ISO timestamp (e.g., 2025-10-10T03:41:22Z) to readable format with commas."""
     if ts in ("—", None):
         return "—"
     try:
         dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
         return dt.strftime("%B %d, %Y, %H:%M:%S UTC")
     except Exception:
-        return ts  # fallback
+        return ts
 
 
 def login_and_get_session(username, password):
@@ -28,22 +37,25 @@ def login_and_get_session(username, password):
     session.headers.update(HEADERS)
 
     r1 = session.get(API_URL, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'type': 'login',
-        'format': 'json'
-    })
-    login_token = r1.json()['query']['tokens']['logintoken']
+        "action": "query",
+        "meta": "tokens",
+        "type": "login",
+        "format": "json"
+    }, timeout=20)
+
+    data = safe_json(r1, "login token")
+    login_token = data.get("query", {}).get("tokens", {}).get("logintoken")
 
     r2 = session.post(API_URL, data={
-        'action': 'login',
-        'lgname': username,
-        'lgpassword': password,
-        'lgtoken': login_token,
-        'format': 'json'
-    })
-    result = r2.json()
-    if result['login']['result'] != 'Success':
+        "action": "login",
+        "lgname": username,
+        "lgpassword": password,
+        "lgtoken": login_token,
+        "format": "json"
+    }, timeout=20)
+
+    result = safe_json(r2, "login")
+    if result.get("login", {}).get("result") != "Success":
         print(f"❌ Login failed: {result}")
         sys.exit(1)
 
@@ -54,60 +66,71 @@ def login_and_get_session(username, password):
 def get_admins(session):
     admins = []
     aufrom = None
+
     while True:
         params = {
-            'action': 'query',
-            'list': 'allusers',
-            'augroup': 'sysop',
-            'aulimit': 'max',
-            'format': 'json'
+            "action": "query",
+            "list": "allusers",
+            "augroup": "sysop",
+            "aulimit": "max",
+            "format": "json"
         }
+
         if aufrom:
-            params['aufrom'] = aufrom
+            params["aufrom"] = aufrom
 
-        r = session.get(API_URL, params=params)
-        data = r.json()
-        users = data.get('query', {}).get('allusers', [])
-        admins.extend([u['name'] for u in users])
+        r = session.get(API_URL, params=params, timeout=20)
+        data = safe_json(r, "get_admins")
 
-        if 'continue' in data:
-            aufrom = data['continue']['aufrom']
+        users = data.get("query", {}).get("allusers", [])
+        admins.extend([u["name"] for u in users])
+
+        if "continue" in data:
+            aufrom = data["continue"]["aufrom"]
         else:
             break
+
     return admins
 
 
 def fetch_user_activity(session, username):
-    """Fetch last edit and last log for a single user."""
     last_edit = "—"
     last_log = "—"
 
-    # Last edit
-    r1 = session.get(API_URL, params={
-        'action': 'query',
-        'list': 'usercontribs',
-        'ucuser': username,
-        'uclimit': 1,
-        'ucprop': 'timestamp|title',
-        'ucdir': 'older',  # newest first
-        'format': 'json'
-    })
-    contribs = r1.json().get('query', {}).get('usercontribs', [])
-    if contribs:
-        last_edit = contribs[0]['timestamp']
+    try:
+        r1 = session.get(API_URL, params={
+            "action": "query",
+            "list": "usercontribs",
+            "ucuser": username,
+            "uclimit": 1,
+            "ucprop": "timestamp|title",
+            "ucdir": "older",
+            "format": "json"
+        }, timeout=20)
 
-    # Last log
-    r2 = session.get(API_URL, params={
-        'action': 'query',
-        'list': 'logevents',
-        'leuser': username,
-        'lelimit': 1,
-        'ledir': 'older',  # newest first
-        'format': 'json'
-    })
-    logs = r2.json().get('query', {}).get('logevents', [])
-    if logs:
-        last_log = logs[0]['timestamp']
+        data1 = safe_json(r1, f"usercontribs {username}")
+        contribs = data1.get("query", {}).get("usercontribs", [])
+
+        if contribs:
+            last_edit = contribs[0]["timestamp"]
+
+        r2 = session.get(API_URL, params={
+            "action": "query",
+            "list": "logevents",
+            "leuser": username,
+            "lelimit": 1,
+            "ledir": "older",
+            "format": "json"
+        }, timeout=20)
+
+        data2 = safe_json(r2, f"logevents {username}")
+        logs = data2.get("query", {}).get("logevents", [])
+
+        if logs:
+            last_log = logs[0]["timestamp"]
+
+    except Exception as e:
+        print(f"⚠️ Error fetching activity for {username}: {e}")
 
     if last_edit != "—" and last_log != "—":
         last_activity = max(last_edit, last_log)
@@ -119,43 +142,55 @@ def fetch_user_activity(session, username):
         last_activity = None
 
     return {
-        'username': username,
-        'last_edit': last_edit,
-        'last_log': last_log,
-        'last_activity': last_activity
+        "username": username,
+        "last_edit": last_edit,
+        "last_log": last_log,
+        "last_activity": last_activity
     }
 
 
 def get_all_activities(session, admins):
-    """Fetch all admins' activities in parallel."""
     results = []
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        future_to_user = {executor.submit(fetch_user_activity, session, user): user for user in admins}
-        for future in as_completed(future_to_user):
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_user_activity, session, u): u for u in admins}
+
+        for future in as_completed(futures):
             result = future.result()
             results.append(result)
-    results.sort(key=lambda x: x['last_activity'] or "0000", reverse=True)
+
+    results.sort(key=lambda x: x["last_activity"] or "0000", reverse=True)
     return results
 
 
 def get_csrf_token(session):
-    r = session.get(API_URL, params={'action': 'query', 'meta': 'tokens', 'format': 'json'})
-    return r.json()['query']['tokens']['csrftoken']
+    r = session.get(API_URL, params={
+        "action": "query",
+        "meta": "tokens",
+        "format": "json"
+    }, timeout=20)
+
+    data = safe_json(r, "csrf token")
+    return data.get("query", {}).get("tokens", {}).get("csrftoken")
 
 
 def get_current_page_text(session, title):
     r = session.get(API_URL, params={
-        'action': 'query',
-        'prop': 'revisions',
-        'titles': title,
-        'rvslots': 'main',
-        'rvprop': 'content',
-        'format': 'json'
-    })
-    pages = r.json()['query']['pages']
+        "action": "query",
+        "prop": "revisions",
+        "titles": title,
+        "rvslots": "main",
+        "rvprop": "content",
+        "format": "json"
+    }, timeout=20)
+
+    data = safe_json(r, "get page text")
+    pages = data.get("query", {}).get("pages", {})
+
     for page_id in pages:
-        return pages[page_id].get('revisions', [{}])[0].get('slots', {}).get('main', {}).get('*', '')
-    return ''
+        return pages[page_id].get("revisions", [{}])[0].get("slots", {}).get("main", {}).get("*", "")
+
+    return ""
 
 
 def save_to_page(session, page_title, admins_data):
@@ -166,12 +201,14 @@ def save_to_page(session, page_title, admins_data):
         '! Last edit',
         '! Last log'
     ]
+
     for i, admin in enumerate(admins_data, start=1):
         table_lines.append('|-')
         table_lines.append(f'| {i}')
         table_lines.append(f'| [[User:{admin["username"]}|{admin["username"]}]]')
         table_lines.append(f'| {format_timestamp(admin["last_edit"])}')
         table_lines.append(f'| {format_timestamp(admin["last_log"])}')
+
     table_lines.append('|}')
     new_table = "\n".join(table_lines)
 
@@ -183,21 +220,24 @@ def save_to_page(session, page_title, admins_data):
         new_text = current_text + "\n\n== Active admins ==\n" + new_table
 
     token = get_csrf_token(session)
+
     r = session.post(API_URL, data={
-        'action': 'edit',
-        'title': page_title,
-        'text': new_text,
-        'token': token,
-        'format': 'json',
-        'bot': True,
-        'summary': 'Updating active admins table (bot)',
-        'assert': 'user',
-    })
-    result = r.json()
-    if 'error' in result:
+        "action": "edit",
+        "title": page_title,
+        "text": new_text,
+        "token": token,
+        "format": "json",
+        "bot": True,
+        "summary": "Updating active admins table (bot)",
+        "assert": "user"
+    }, timeout=20)
+
+    result = safe_json(r, "edit page")
+
+    if "error" in result:
         print(f"❌ Edit error: {result}")
         sys.exit(1)
-    elif result.get('edit', {}).get('result') == 'Success':
+    elif result.get("edit", {}).get("result") == "Success":
         print(f"✅ Updated page {page_title}")
     else:
         print(f"❌ Unexpected edit response: {result}")
@@ -214,10 +254,12 @@ def run_bot():
         sys.exit(1)
 
     session = login_and_get_session(username, password)
+
     admins = get_admins(session)
     print(f"👥 Found {len(admins)} admins")
 
     admins_data = get_all_activities(session, admins)
+
     save_to_page(session, save_page, admins_data)
 
 
